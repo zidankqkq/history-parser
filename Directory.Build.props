@@ -1,0 +1,17 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <Deterministic>true</Deterministic>
+    <Version>1.1.0</Version>
+    <Product>History Parser</Product>
+    <Company>History Parser (open source)</Company>
+    <!-- Deliberately NOT obfuscated, trimmed or packed: the published binary is plain IL
+         and can be inspected with ILSpy/dnSpy to confirm it matches this source. -->
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+</Project>

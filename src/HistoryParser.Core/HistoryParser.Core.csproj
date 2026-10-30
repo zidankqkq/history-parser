@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>HistoryParser.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Diagnostics.EventLog" Version="9.0.0" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="HistoryParser.Core.Tests" />
+    <InternalsVisibleTo Include="RatChecker.Core" />
+    <!-- The launchers, so their own lines in PowerShell history and logs are recognised as this program's. -->
+    <EmbeddedResource Include="..\..\run.ps1" LogicalName="launcher.run.ps1" />
+    <EmbeddedResource Include="..\..\run-logparser.ps1" LogicalName="launcher.run-logparser.ps1" />
+  </ItemGroup>
+  <!-- publish.ps1 passes the SHA-256 of the suite's other programs (joined with "_"), so their own runs are
+       recognised by hash - never by name or folder. -->
+  <ItemGroup Condition="'$(SuiteHashes)' != ''">
+    <AssemblyMetadata Include="SuiteHashes" Value="$(SuiteHashes)" />
+  </ItemGroup>
+</Project>

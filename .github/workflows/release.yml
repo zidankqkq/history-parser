@@ -1,0 +1,52 @@
+# Builds HistoryParser.exe on GitHub's servers and attaches it to a release. Push a tag like v1.0.0 to run it.
+# The exe comes with a signed build-provenance attestation:  gh attestation verify HistoryParser.exe --repo <user>/history-parser
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Test
+        # Integration tests that read live OS state skip themselves on CI (they check the CI env var).
+        run: dotnet test tests/HistoryParser.Core.Tests -c Release
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          ./publish.ps1 -Version $version -Out publish
+
+      - name: Hash
+        shell: pwsh
+        run: |
+          "$((Get-FileHash publish/HistoryParser.exe -Algorithm SHA256).Hash.ToLower())  HistoryParser.exe" | Out-File publish/SHA256SUMS.txt -Encoding ascii
+          Get-Content publish/SHA256SUMS.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: publish/HistoryParser.exe
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            publish/HistoryParser.exe
+            publish/SHA256SUMS.txt
+            run.ps1
+          generate_release_notes: true

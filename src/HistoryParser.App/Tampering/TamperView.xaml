@@ -1,0 +1,474 @@
+<UserControl x:Class="HistoryParser.App.Tampering.TamperView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:HistoryParser.App.Tampering"
+             xmlns:app="clr-namespace:HistoryParser.App.Tampering"
+             xmlns:cv="clr-namespace:HistoryParser.App.Converters"
+             Background="{StaticResource Bg}" Foreground="{StaticResource Text}" FontFamily="{StaticResource UiFont}"
+             PreviewKeyDown="View_PreviewKeyDown">
+    <!-- The tampering and bypass pages of History Parser: shown in the main window when a Tampering entry is picked in its sidebar. -->
+    <UserControl.Resources>
+        <cv:LocalTimeConverter x:Key="Time" />
+        <cv:ToneBrushConverter x:Key="Tone" />
+        <cv:EqualsToVisibilityConverter x:Key="PageVis" />
+        <cv:EqualsToBoolConverter x:Key="Is" />
+        <cv:VisibleWhenConverter x:Key="Vis" />
+        <cv:CategoryTextConverter x:Key="CategoryText" />
+        <app:SizeConverter x:Key="Size" />
+        <app:YesNoConverter x:Key="YesNo" />
+
+        <DataTemplate x:Key="FindingCard">
+            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="4" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border CornerRadius="10,0,0,10" Background="{Binding Severity, Converter={StaticResource Tone}}" />
+                    <StackPanel Grid.Column="1" Margin="14,11,14,12">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding TimeUtc, Converter={StaticResource Time}}"
+                                       Foreground="{StaticResource TextFaint}" FontSize="12" FontFamily="{StaticResource MonoFont}" />
+                            <Border CornerRadius="9" Padding="8,2" Margin="0,0,10,0" VerticalAlignment="Center"
+                                    Background="{Binding Severity, Converter={StaticResource Tone}, ConverterParameter=soft}">
+                                <TextBlock Text="{Binding Severity}" FontSize="11" FontWeight="SemiBold" Foreground="{Binding Severity, Converter={StaticResource Tone}}" />
+                            </Border>
+                            <TextBlock Text="{Binding Category, Converter={StaticResource CategoryText}}" Foreground="{StaticResource TextFaint}" FontSize="12"
+                                       VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13.5" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" Foreground="{StaticResource Text}" />
+                        </DockPanel>
+                        <TextBlock Text="{Binding Detail}" Style="{StaticResource Sub}" Margin="0,7,0,0" FontSize="12.5" />
+                        <TextBlock Text="{Binding Path}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" Foreground="{StaticResource Accent}"
+                                   Margin="0,6,0,0" TextTrimming="CharacterEllipsis" Visibility="{Binding Path, Converter={StaticResource Vis}}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <!-- Small coloured dot for a bool flag (Flagged / Suspicious) -->
+        <DataTemplate x:Key="FlagDot">
+            <Ellipse Width="8" Height="8" Fill="{StaticResource Medium}" />
+        </DataTemplate>
+
+        <Style x:Key="StatValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="30" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="FontFamily" Value="{StaticResource DisplayFont}" />
+        </Style>
+        <Style x:Key="TableTitle" TargetType="TextBlock" BasedOn="{StaticResource H2}">
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style x:Key="Mono" TargetType="TextBlock" BasedOn="{StaticResource CellMono}" />
+        <Style x:Key="Plain" TargetType="TextBlock" BasedOn="{StaticResource CellText}" />
+        <Style x:Key="Faint" TargetType="TextBlock" BasedOn="{StaticResource CellSub}" />
+        <Style x:Key="Bold" TargetType="TextBlock" BasedOn="{StaticResource CellText}">
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style x:Key="Warn" TargetType="TextBlock" BasedOn="{StaticResource CellText}">
+            <Setter Property="Foreground" Value="{StaticResource Medium}" />
+        </Style>
+
+        <ContextMenu x:Key="RowMenu" x:Shared="False">
+            <MenuItem Header="Copy row" InputGestureText="Ctrl+C"
+                      Command="{Binding PlacementTarget.DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                      CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={x:Static app:RowText.Instance}}" />
+        </ContextMenu>
+    </UserControl.Resources>
+
+    <Grid>
+        <!-- ================= Content ================= -->
+        <Grid Background="{StaticResource Bg}">
+
+            <!-- ===== Results ===== -->
+            <Grid Visibility="{Binding HasResults, Converter={StaticResource Vis}}">
+
+                <!-- Overview -->
+                <ScrollViewer Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Overview}" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="28,24,28,28">
+                        <TextBlock Text="Tampering summary" Style="{StaticResource H1}" />
+                        <TextBlock Text="{Binding MachineLine}" Style="{StaticResource Sub}" Margin="0,4,0,0" FontSize="13" />
+                        <TextBlock Text="{Binding ScanLine}" Style="{StaticResource Sub}" Foreground="{StaticResource TextFaint}" Margin="0,2,0,0" />
+
+                        <UniformGrid Columns="6" Margin="-5,20,-5,0">
+                            <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Findings">
+                                <StackPanel>
+                                    <TextBlock Text="High" Style="{StaticResource Caps}" />
+                                    <TextBlock Text="{Binding HighCount}" Style="{StaticResource StatValue}" Foreground="{StaticResource High}" />
+                                    <TextBlock Text="findings" Style="{StaticResource Sub}" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Findings">
+                                <StackPanel>
+                                    <TextBlock Text="Medium" Style="{StaticResource Caps}" />
+                                    <TextBlock Text="{Binding MediumCount}" Style="{StaticResource StatValue}" Foreground="{StaticResource Medium}" />
+                                    <TextBlock Text="findings" Style="{StaticResource Sub}" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Logs">
+                                <StackPanel>
+                                    <TextBlock Text="Logs" Style="{StaticResource Caps}" />
+                                    <TextBlock Text="{Binding DeletedRecords}" Style="{StaticResource StatValue}" />
+                                    <TextBlock Text="records deleted" Style="{StaticResource Sub}" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Evidence">
+                                <StackPanel>
+                                    <TextBlock Text="Evidence" Style="{StaticResource Caps}" />
+                                    <TextBlock Text="{Binding FlaggedEvidence}" Style="{StaticResource StatValue}" />
+                                    <TextBlock Text="files wiped" Style="{StaticResource Sub}" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Usb">
+                                <StackPanel>
+                                    <TextBlock Text="USB" Style="{StaticResource Caps}" />
+                                    <TextBlock Text="{Binding UsbCount}" Style="{StaticResource StatValue}" />
+                                    <TextBlock Text="devices ever" Style="{StaticResource Sub}" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Arguments">
+                                <StackPanel>
+                                    <TextBlock Text="Arguments" Style="{StaticResource Caps}" />
+                                    <TextBlock Text="{Binding FlaggedArguments}" Style="{StaticResource StatValue}" />
+                                    <TextBlock Text="flagged" Style="{StaticResource Sub}" />
+                                </StackPanel>
+                            </Button>
+                        </UniformGrid>
+
+                        <DockPanel Margin="0,22,0,10">
+                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="All findings →"
+                                    Command="{Binding NavigateCommand}" CommandParameter="Findings" VerticalAlignment="Center" />
+                            <TextBlock Text="Top findings" Style="{StaticResource H2}" />
+                        </DockPanel>
+                        <ItemsControl ItemsSource="{Binding TopFindings}" ItemTemplate="{StaticResource FindingCard}">
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="Margin" Value="0,0,0,8" />
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                        </ItemsControl>
+                        <Border Style="{StaticResource Card}" Visibility="{Binding TopFindings, Converter={StaticResource Vis}, ConverterParameter=invert}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" Text="&#xE73E;" Foreground="{StaticResource Ok}" Margin="0,0,10,0" />
+                                <TextBlock Text="No signs of tampering found." />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Table pages: shared header, then the page's tables -->
+                <Grid Visibility="{Binding IsTablePage, Converter={StaticResource Vis}}" Margin="28,22,28,22">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" VerticalAlignment="Bottom" Style="{StaticResource Sub}">
+                            <Run Text="{Binding VisibleRows, Mode=OneWay, StringFormat=N0}" /> <Run Text="shown" /><LineBreak /><Run Text="{Binding HiddenText, Mode=OneWay}" Foreground="{StaticResource TextFaint}" FontSize="11.5" />
+                        </TextBlock>
+                        <StackPanel>
+                            <TextBlock Text="{Binding PageTitle}" Style="{StaticResource H1}" />
+                            <TextBlock Text="{Binding PageSubtitle}" Style="{StaticResource Sub}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </DockPanel>
+                    <WrapPanel Grid.Row="1" Margin="0,14,0,12">
+                        <TextBox x:Name="SearchBox" Style="{StaticResource SearchBox}" Width="340" Tag="Search every column…  (Ctrl+F)"
+                                 Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,16,0" />
+                        <CheckBox Style="{StaticResource Switch}" Content="Flagged only" IsChecked="{Binding FlaggedOnly}" VerticalAlignment="Center"
+                                  ToolTip="Only rows that are suspicious on their own" />
+                        <CheckBox Style="{StaticResource Switch}" Content="Hide Temp files" IsChecked="{Binding HideTemp}" VerticalAlignment="Center" Margin="20,0,0,0"
+                                  Visibility="{Binding ShowTempToggle, Converter={StaticResource Vis}}"
+                                  ToolTip="Hide unflagged rows about temporary files: files in Temp folders, and Windows saving a file through a temporary copy (recognised by its exact naming, folder and order). Flagged rows always stay. Only changes what is shown." />
+                    </WrapPanel>
+
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <!-- Findings -->
+                        <ListBox Style="{StaticResource PlainList}" ItemsSource="{Binding FindingsView}" ItemTemplate="{StaticResource FindingCard}"
+                                 Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Findings}" />
+
+                        <!-- Event logs -->
+                        <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Logs}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="3*" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="2*" />
+                            </Grid.RowDefinitions>
+                            <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <DataGrid ItemsSource="{Binding LogsView}" ContextMenu="{StaticResource RowMenu}">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="" Width="34" MinWidth="34" SortMemberPath="State">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate><Ellipse Width="8" Height="8" Fill="{Binding State, Converter={StaticResource Tone}}" /></DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="Log" Binding="{Binding Channel}" Width="250" ElementStyle="{StaticResource Bold}" />
+                                        <DataGridTextColumn Header="Enabled" Binding="{Binding Enabled, Converter={StaticResource YesNo}}" SortMemberPath="Enabled" Width="74" ElementStyle="{StaticResource Plain}" />
+                                        <DataGridTextColumn Header="Records" Binding="{Binding RecordCount, StringFormat=N0}" Width="90" ElementStyle="{StaticResource Faint}" />
+                                        <DataGridTextColumn Header="Size" Binding="{Binding FileSizeBytes, Converter={StaticResource Size}}" SortMemberPath="FileSizeBytes" Width="80" ElementStyle="{StaticResource Faint}" />
+                                        <DataGridTextColumn Header="Max size" Binding="{Binding MaxSizeBytes, Converter={StaticResource Size}}" SortMemberPath="MaxSizeBytes" Width="80" ElementStyle="{StaticResource Faint}" />
+                                        <DataGridTextColumn Header="Oldest event" Binding="{Binding OldestUtc, Converter={StaticResource Time}}" SortMemberPath="OldestUtc" Width="150" ElementStyle="{StaticResource Mono}" />
+                                        <DataGridTextColumn Header="Deleted" Binding="{Binding MissingRecords, StringFormat=N0}" Width="74" ElementStyle="{StaticResource Plain}" />
+                                        <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="*" MinWidth="200" ElementStyle="{StaticResource Faint}" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+                            <TextBlock Grid.Row="1" Text="Deleted records (gaps in the record numbers)" Style="{StaticResource TableTitle}" Margin="0,16,0,8" />
+                            <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <Grid>
+                                    <DataGrid ItemsSource="{Binding GapsView}" ContextMenu="{StaticResource RowMenu}" Tag="No gaps: no events were deleted from the middle of a log in this period.">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Log" Binding="{Binding Channel}" Width="250" ElementStyle="{StaticResource Bold}" />
+                                            <DataGridTextColumn Header="Missing" Binding="{Binding Missing, StringFormat=N0}" Width="90" ElementStyle="{StaticResource Warn}" />
+                                            <DataGridTextColumn Header="After record" Binding="{Binding AfterRecordId}" Width="110" ElementStyle="{StaticResource Faint}" />
+                                            <DataGridTextColumn Header="Before record" Binding="{Binding BeforeRecordId}" Width="110" ElementStyle="{StaticResource Faint}" />
+                                            <DataGridTextColumn Header="Between" Binding="{Binding AfterTimeUtc, Converter={StaticResource Time}}" SortMemberPath="AfterTimeUtc" Width="160" ElementStyle="{StaticResource Mono}" />
+                                            <DataGridTextColumn Header="and" Binding="{Binding BeforeTimeUtc, Converter={StaticResource Time}}" SortMemberPath="BeforeTimeUtc" Width="*" ElementStyle="{StaticResource Mono}" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Services -->
+                        <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Services}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <DataGrid ItemsSource="{Binding ServicesView}" ContextMenu="{StaticResource RowMenu}">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="" Width="34" MinWidth="34" SortMemberPath="Status">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate><Ellipse Width="8" Height="8" Fill="{Binding Status, Converter={StaticResource Tone}}" /></DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="Service" Binding="{Binding Name}" Width="110" ElementStyle="{StaticResource Bold}" />
+                                        <DataGridTextColumn Header="What it does" Binding="{Binding Role}" Width="220" ElementStyle="{StaticResource Faint}" />
+                                        <DataGridTextColumn Header="Start type" Binding="{Binding StartType}" Width="96" ElementStyle="{StaticResource Plain}" />
+                                        <DataGridTextColumn Header="State" Binding="{Binding State}" Width="86" ElementStyle="{StaticResource Plain}" />
+                                        <DataGridTextColumn Header="Settings changed" Binding="{Binding ConfigChangedUtc, Converter={StaticResource Time}}" SortMemberPath="ConfigChangedUtc" Width="150" ElementStyle="{StaticResource Mono}" />
+                                        <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="*" MinWidth="160" ElementStyle="{StaticResource Faint}" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+                            <TextBlock Grid.Row="1" Text="Service history" Style="{StaticResource TableTitle}" Margin="0,16,0,8" />
+                            <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <DataGrid ItemsSource="{Binding ServiceEventsView}" ContextMenu="{StaticResource RowMenu}">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="" Width="34" MinWidth="34" SortMemberPath="Suspicious">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate><Ellipse Width="8" Height="8" Fill="{StaticResource Medium}" Visibility="{Binding Suspicious, Converter={StaticResource Vis}}" /></DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="Time" Binding="{Binding TimeUtc, Converter={StaticResource Time}}" SortMemberPath="TimeUtc" Width="154" ElementStyle="{StaticResource Mono}" />
+                                        <DataGridTextColumn Header="Service" Binding="{Binding Service}" Width="110" ElementStyle="{StaticResource Bold}" />
+                                        <DataGridTextColumn Header="Change" Binding="{Binding Change}" Width="*" ElementStyle="{StaticResource Plain}" />
+                                        <DataGridTextColumn Header="Event" Binding="{Binding EventId}" Width="70" ElementStyle="{StaticResource Faint}" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+                        </Grid>
+
+                        <!-- USB -->
+                        <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Usb}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <Grid>
+                                    <DataGrid ItemsSource="{Binding UsbView}" ContextMenu="{StaticResource RowMenu}" Tag="No USB storage device was connected in this period, and none is plugged in now.">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Device" Binding="{Binding Name}" Width="240" ElementStyle="{StaticResource Bold}" />
+                                            <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="190" ElementStyle="{StaticResource Mono}" />
+                                            <DataGridTextColumn Header="Drive" Binding="{Binding DriveLetter}" Width="60" ElementStyle="{StaticResource Plain}" />
+                                            <DataGridTextColumn Header="First connected" Binding="{Binding FirstConnectedUtc, Converter={StaticResource Time}}" SortMemberPath="FirstConnectedUtc" Width="150" ElementStyle="{StaticResource Mono}" />
+                                            <DataGridTextColumn Header="Last connected" Binding="{Binding LastConnectedUtc, Converter={StaticResource Time}}" SortMemberPath="LastConnectedUtc" Width="150" ElementStyle="{StaticResource Mono}" />
+                                            <DataGridTextColumn Header="Last removed" Binding="{Binding LastRemovedUtc, Converter={StaticResource Time}}" SortMemberPath="LastRemovedUtc" Width="150" ElementStyle="{StaticResource Mono}" />
+                                            <DataGridTextColumn Header="Plugged in now" Binding="{Binding ConnectedNow, Converter={StaticResource YesNo}}" SortMemberPath="ConnectedNow" Width="*" ElementStyle="{StaticResource Plain}" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
+                            </Border>
+                            <TextBlock Grid.Row="1" Text="Connect and disconnect history" Style="{StaticResource TableTitle}" Margin="0,16,0,8" />
+                            <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <DataGrid ItemsSource="{Binding UsbEventsView}" ContextMenu="{StaticResource RowMenu}">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Time" Binding="{Binding TimeUtc, Converter={StaticResource Time}}" SortMemberPath="TimeUtc" Width="154" ElementStyle="{StaticResource Mono}" />
+                                        <DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="110" ElementStyle="{StaticResource Bold}" />
+                                        <DataGridTextColumn Header="Device" Binding="{Binding Device}" Width="260" ElementStyle="{StaticResource Plain}" />
+                                        <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="200" ElementStyle="{StaticResource Mono}" />
+                                        <DataGridTextColumn Header="Size" Binding="{Binding Detail}" Width="*" ElementStyle="{StaticResource Faint}" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Arguments -->
+                        <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True"
+                                Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Arguments}">
+                            <DataGrid ItemsSource="{Binding ArgumentsView}" ContextMenu="{StaticResource RowMenu}">
+                                <DataGrid.Columns>
+                                    <DataGridTemplateColumn Header="" Width="34" MinWidth="34" SortMemberPath="Flagged">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate><Ellipse Width="8" Height="8" Fill="{StaticResource Medium}" Visibility="{Binding Flagged, Converter={StaticResource Vis}}" /></DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Time" Binding="{Binding TimeUtc, Converter={StaticResource Time}}" SortMemberPath="TimeUtc" Width="154" ElementStyle="{StaticResource Mono}" />
+                                    <DataGridTextColumn Header="Program" Binding="{Binding Program}" Width="140" ElementStyle="{StaticResource Bold}" />
+                                    <DataGridTextColumn Header="Why flagged" Binding="{Binding Reasons}" Width="230" ElementStyle="{StaticResource Warn}" />
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="170" ElementStyle="{StaticResource Faint}" />
+                                    <DataGridTextColumn Header="Command line" Binding="{Binding CommandLine}" Width="*" MinWidth="300" ElementStyle="{StaticResource Mono}" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Border>
+
+                        <!-- Evidence files -->
+                        <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True"
+                                Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Evidence}">
+                            <DataGrid ItemsSource="{Binding EvidenceView}" ContextMenu="{StaticResource RowMenu}" Tag="No evidence files were deleted, emptied or switched off in this period (deletions can only be seen as administrator).">
+                                <DataGrid.Columns>
+                                    <DataGridTemplateColumn Header="" Width="34" MinWidth="34" SortMemberPath="Suspicious">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate><Ellipse Width="8" Height="8" Fill="{StaticResource Medium}" Visibility="{Binding Suspicious, Converter={StaticResource Vis}}" /></DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Time" Binding="{Binding TimeUtc, Converter={StaticResource Time}}" SortMemberPath="TimeUtc" Width="154" ElementStyle="{StaticResource Mono}" />
+                                    <DataGridTextColumn Header="Evidence" Binding="{Binding Artifact}" Width="130" ElementStyle="{StaticResource Bold}" />
+                                    <DataGridTextColumn Header="What happened" Binding="{Binding Change}" Width="200" ElementStyle="{StaticResource Plain}" />
+                                    <DataGridTextColumn Header="Path" Binding="{Binding Path}" Width="*" MinWidth="240" ElementStyle="{StaticResource Mono}" />
+                                    <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="180" ElementStyle="{StaticResource Faint}" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Border>
+
+
+                        <!-- Clock & integrity -->
+                        <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Clock}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Border Style="{StaticResource Card}" Padding="0" Margin="0,0,0,16" MaxHeight="220">
+                                <Grid>
+                                    <DataGrid ItemsSource="{Binding ClockView}" ContextMenu="{StaticResource RowMenu}" Tag="No clock changes. Normal sleep/resume re-syncs and small time-service corrections are ignored.">
+                                        <DataGrid.Columns>
+                                            <DataGridTemplateColumn Header="" Width="34" MinWidth="34" SortMemberPath="Severity">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate><Ellipse Width="8" Height="8" Fill="{Binding Severity, Converter={StaticResource Tone}}" /></DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTextColumn Header="Clock change" Binding="{Binding Source}" Width="240" ElementStyle="{StaticResource Bold}" />
+                                            <DataGridTextColumn Header="From" Binding="{Binding OldTimeUtc, Converter={StaticResource Time}}" SortMemberPath="OldTimeUtc" Width="154" ElementStyle="{StaticResource Mono}" />
+                                            <DataGridTextColumn Header="To" Binding="{Binding NewTimeUtc, Converter={StaticResource Time}}" SortMemberPath="NewTimeUtc" Width="154" ElementStyle="{StaticResource Mono}" />
+                                            <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="*" ElementStyle="{StaticResource Faint}" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
+                            </Border>
+                            <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <DataGrid ItemsSource="{Binding ChecksView}" ContextMenu="{StaticResource RowMenu}">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="" Width="34" MinWidth="34" SortMemberPath="State">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate><Ellipse Width="8" Height="8" Fill="{Binding State, Converter={StaticResource Tone}}" /></DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="Area" Binding="{Binding Area}" Width="110" ElementStyle="{StaticResource Faint}" />
+                                        <DataGridTextColumn Header="Check" Binding="{Binding Name}" Width="240" ElementStyle="{StaticResource Bold}" />
+                                        <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="*" ElementStyle="{StaticResource Faint}" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Details of the clicked row (pages listed in LogViewModel.DetailPages) -->
+                        <Border Grid.Column="1" Width="360" Margin="16,0,0,0" Style="{StaticResource Card}" Padding="0"
+                                Visibility="{Binding HasDetailsPanel, Converter={StaticResource Vis}}">
+                            <Grid>
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24"
+                                            Visibility="{Binding Details, Converter={StaticResource Vis}, ConverterParameter=invert}">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE8A7;" FontSize="24" Foreground="{StaticResource TextFaint}" HorizontalAlignment="Center" />
+                                    <TextBlock Text="Click a row to see everything about it" Style="{StaticResource Sub}" Margin="0,10,0,0" HorizontalAlignment="Center" TextAlignment="Center" />
+                                </StackPanel>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding Details, Converter={StaticResource Vis}}">
+                                    <StackPanel Margin="20,18,20,20" DataContext="{Binding Details}">
+                                        <TextBlock Text="{Binding Title}" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Sub}" Margin="0,3,0,0" />
+                                        <Border CornerRadius="8" Padding="12,10" Margin="0,12,0,0" Background="{StaticResource NeutralSoft}"
+                                                Visibility="{Binding Note, Converter={StaticResource Vis}}">
+                                            <DockPanel>
+                                                <TextBlock Style="{StaticResource Icon}" Text="&#xE946;" FontSize="13" Foreground="{StaticResource TextSub}" Margin="0,2,10,0" VerticalAlignment="Top" />
+                                                <TextBlock Text="{Binding Note}" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource Text}" />
+                                            </DockPanel>
+                                        </Border>
+                                        <ItemsControl ItemsSource="{Binding Fields}" Margin="0,14,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Margin="0,0,0,10">
+                                                        <TextBlock Text="{Binding Label}" Style="{StaticResource Caps}" />
+                                                        <TextBox Text="{Binding Value, Mode=OneWay}" TextWrapping="Wrap" Margin="0,3,0,0">
+                                                            <TextBox.Style>
+                                                                <Style TargetType="TextBox" BasedOn="{StaticResource SelectableText}">
+                                                                    <Setter Property="FontSize" Value="12.5" />
+                                                                    <Style.Triggers>
+                                                                        <!-- Command lines, paths and raw values read best in the code font. -->
+                                                                        <DataTrigger Binding="{Binding Mono}" Value="True">
+                                                                            <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+                                                                            <Setter Property="FontSize" Value="11.5" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBox.Style>
+                                                        </TextBox>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Text="FINDINGS" Style="{StaticResource Caps}" Margin="0,8,0,8" Visibility="{Binding Findings, Converter={StaticResource Vis}}" />
+                                        <ItemsControl ItemsSource="{Binding Findings}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border CornerRadius="8" Padding="12,10" Margin="0,0,0,8" Background="{Binding Severity, Converter={StaticResource Tone}, ConverterParameter=soft}">
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12.5" TextWrapping="Wrap" Foreground="{Binding Severity, Converter={StaticResource Tone}}" />
+                                                            <TextBlock Text="{Binding Detail}" Style="{StaticResource Sub}" Foreground="{StaticResource Text}" Margin="0,4,0,0" FontSize="12" TextWrapping="Wrap" />
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Text="{Binding RelatedTitle}" Style="{StaticResource Caps}" Margin="0,8,0,8" Visibility="{Binding Related, Converter={StaticResource Vis}}" />
+                                        <ItemsControl ItemsSource="{Binding Related}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Margin="0,0,0,10">
+                                                        <TextBlock FontSize="12">
+                                                            <Run Text="{Binding TimeUtc, Converter={StaticResource Time}, Mode=OneWay}" FontFamily="{StaticResource MonoFont}" />
+                                                            <Run Text="  " /><Run Text="{Binding What, Mode=OneWay}" FontWeight="SemiBold" />
+                                                        </TextBlock>
+                                                        <TextBlock Text="{Binding Detail}" Style="{StaticResource Sub}" FontSize="11.5" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </Grid>
+
+        </Grid>
+    </Grid>
+</UserControl>

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Kept apart from HistoryParser.Core on purpose: the stealer indicators live only in the RAT Checker,
+       so History Parser and Log Parser never carry them (antivirus could mistake them for the malware). -->
+  <PropertyGroup>
+    <RootNamespace>RatChecker.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\HistoryParser.Core\HistoryParser.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="HistoryParser.Core.Tests" />
+  </ItemGroup>
+</Project>

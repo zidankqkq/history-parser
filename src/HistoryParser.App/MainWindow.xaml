@@ -1,0 +1,1652 @@
+<Window x:Class="HistoryParser.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:HistoryParser.App.ViewModels"
+        xmlns:cv="clr-namespace:HistoryParser.App.Converters"
+        xmlns:tamper="clr-namespace:HistoryParser.App.Tampering"
+        Title="History Parser" Width="1440" Height="900" MinWidth="1100" MinHeight="680"
+        WindowStartupLocation="CenterScreen" Background="{StaticResource Bg}"
+        FontFamily="{StaticResource UiFont}" Foreground="{StaticResource Text}"
+        TextOptions.TextFormattingMode="Display" UseLayoutRounding="True"
+        PreviewKeyDown="Window_PreviewKeyDown">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False" />
+    </WindowChrome.WindowChrome>
+
+    <Window.DataContext>
+        <vm:MainViewModel />
+    </Window.DataContext>
+
+    <Window.Resources>
+        <cv:LocalTimeConverter x:Key="Time" />
+        <cv:ToneBrushConverter x:Key="Tone" />
+        <cv:EqualsToVisibilityConverter x:Key="PageVis" />
+        <cv:EqualsToBoolConverter x:Key="Is" />
+        <cv:VisibleWhenConverter x:Key="Vis" />
+        <cv:StatusTextConverter x:Key="StatusText" />
+        <cv:CategoryTextConverter x:Key="CategoryText" />
+
+        <!-- Severity pill -->
+        <DataTemplate x:Key="SeverityPill">
+            <Border CornerRadius="9" Padding="8,2" HorizontalAlignment="Left"
+                    Background="{Binding Severity, Converter={StaticResource Tone}, ConverterParameter=soft}">
+                <TextBlock Text="{Binding Severity}" FontSize="11" FontWeight="SemiBold"
+                           Foreground="{Binding Severity, Converter={StaticResource Tone}}" />
+            </Border>
+        </DataTemplate>
+
+        <!-- Finding card (Overview, Findings, Inconsistencies) -->
+        <DataTemplate x:Key="FindingCard">
+            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="4" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border CornerRadius="10,0,0,10" Background="{Binding Severity, Converter={StaticResource Tone}}" />
+                    <StackPanel Grid.Column="1" Margin="14,11,14,12">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding TimeUtc, Converter={StaticResource Time}}"
+                                       Foreground="{StaticResource TextFaint}" FontSize="12" FontFamily="{StaticResource MonoFont}" />
+                            <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SeverityPill}" Margin="0,0,10,0" />
+                            <TextBlock Text="{Binding Category, Converter={StaticResource CategoryText}}" Foreground="{StaticResource TextFaint}" FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13.5" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" Foreground="{StaticResource Text}" />
+                        </DockPanel>
+                        <TextBlock Text="{Binding Detail}" Style="{StaticResource Sub}" Margin="0,7,0,0" FontSize="12.5" />
+                        <Button Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="0,7,0,0"
+                                Visibility="{Binding Path, Converter={StaticResource Vis}}"
+                                Command="{Binding DataContext.ShowFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding Path}" ToolTipService.ShowOnDisabled="True"
+                                ToolTip="Open this file's full record (greyed out when the file has no record, e.g. a driver or log path)">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" Text="&#xE8A7;" FontSize="11" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Path}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <Style x:Key="NavLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="12,0,0,0" />
+        </Style>
+        <Style x:Key="Count" TargetType="Border">
+            <Setter Property="CornerRadius" Value="9" />
+            <Setter Property="Padding" Value="7,1" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Background" Value="{StaticResource Surface3}" />
+        </Style>
+        <Style x:Key="CountText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{StaticResource TextSub}" />
+        </Style>
+        <Style x:Key="ToolbarLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextFaint}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+        <Style x:Key="StatValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="30" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="FontFamily" Value="{StaticResource DisplayFont}" />
+        </Style>
+    </Window.Resources>
+
+    <Border x:Name="Root" BorderBrush="{StaticResource Line}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- ================= Title bar ================= -->
+            <Grid Background="{StaticResource Surface}">
+                <StackPanel Orientation="Horizontal" Margin="16,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="History Parser" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock Text="screenshare forensics" Foreground="{StaticResource TextFaint}" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="12" />
+                    <Border Margin="14,0,0,0" CornerRadius="9" Padding="8,2" Background="{StaticResource HighSoft}"
+                            Visibility="{Binding IsElevated, Converter={StaticResource Vis}, ConverterParameter=invert}">
+                        <TextBlock Text="Not elevated" Foreground="{StaticResource High}" FontSize="11" FontWeight="SemiBold" />
+                    </Border>
+                    <Border Margin="10,0,0,0" CornerRadius="9" Padding="8,2" Background="{StaticResource LowSoft}"
+                            Visibility="{Binding LoadedFrom, Converter={StaticResource Vis}}">
+                        <TextBlock Foreground="{StaticResource Low}" FontSize="11" FontWeight="SemiBold">
+                            <Run Text="Saved report:" /> <Run Text="{Binding LoadedFrom, Mode=OneWay}" />
+                        </TextBlock>
+                    </Border>
+                    <Border Margin="10,0,0,0" CornerRadius="9" Padding="8,2" Background="{StaticResource NeutralSoft}"
+                            Visibility="{Binding AutoSaveStatus, Converter={StaticResource Vis}}" ToolTip="{Binding AutoSaveStatus}">
+                        <TextBlock Text="{Binding AutoSaveStatus}" Foreground="{StaticResource TextSub}" FontSize="11" FontWeight="SemiBold" />
+                    </Border>
+                    <Border Margin="10,0,0,0" CornerRadius="9" Padding="8,2" Background="{StaticResource NeutralSoft}"
+                            Visibility="{Binding ShowingRedactedReport, Converter={StaticResource Vis}}"
+                            ToolTip="This report was saved with private details hidden: names are masked and personal history removed.">
+                        <TextBlock Text="Private details hidden" Foreground="{StaticResource TextSub}" FontSize="11" FontWeight="SemiBold" />
+                    </Border>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Style="{StaticResource CaptionButton}" Content="&#xE921;" Click="Minimize_Click" ToolTip="Minimize" />
+                    <Button Style="{StaticResource CaptionButton}" x:Name="MaxButton" Content="&#xE922;" Click="Maximize_Click" ToolTip="Maximize" />
+                    <Button Style="{StaticResource CloseButton}" Content="&#xE8BB;" Click="Close_Click" ToolTip="Close" />
+                </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="236" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- ================= Sidebar ================= -->
+                <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,1,0">
+                    <DockPanel Margin="12,12,12,14">
+                        <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+                            <RadioButton Style="{StaticResource NavButton}" GroupName="nav" Margin="0,0,0,10"
+                                         IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Help}">
+                                <DockPanel>
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE897;" />
+                                    <TextBlock Style="{StaticResource NavLabel}" Text="Help" />
+                                </DockPanel>
+                            </RadioButton>
+                            <Button Style="{StaticResource PrimaryButton}" Command="{Binding PrimaryActionCommand}" Margin="0,0,0,8"
+                                    Visibility="{Binding IsScanning, Converter={StaticResource Vis}, ConverterParameter=invert}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE72C;" FontSize="12" Margin="0,0,8,0" />
+                                    <TextBlock Text="{Binding HasResults, Converter={x:Static cv:ScanLabel.Instance}}" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource GhostButton}" Command="{Binding CancelScanCommand}" Margin="0,0,0,8"
+                                    Visibility="{Binding IsScanning, Converter={StaticResource Vis}}" Content="Cancel scan" />
+<CheckBox Style="{StaticResource Switch}" IsChecked="{Binding HidePrivate}" Content="Hide private details" FontSize="12.5"                                      Margin="2,0,0,10" Visibility="{Binding HasResults, Converter={StaticResource Vis}}"                                      ToolTip="Exports mask the PC and user names, drop unflagged command history, typed searches and raw memory text. Files, findings and flagged commands are kept." />
+                            <UniformGrid Columns="3" Visibility="{Binding HasResults, Converter={StaticResource Vis}}">
+                                <Button Style="{StaticResource GhostButton}" Command="{Binding ExportHtmlCommand}" Margin="0,0,3,0" Padding="6,8"
+                                        Content="HTML" ToolTip="Save a self-contained HTML report to share with staff" />
+                                <Button Style="{StaticResource GhostButton}" Command="{Binding ExportJsonCommand}" Margin="3,0" Padding="6,8"
+                                        Content="JSON" ToolTip="Save the full report; staff can reopen it in HistoryParser (Open saved report)" />
+                                <Button Style="{StaticResource GhostButton}" Command="{Binding ExportCsvCommand}" Margin="3,0,0,0" Padding="6,8"
+                                        Content="CSV" ToolTip="Save the table on this page, exactly as filtered and sorted" />
+                            </UniformGrid>
+                            <Button Style="{StaticResource LinkButton}" Command="{Binding OpenReportCommand}" Margin="2,12,0,0" HorizontalAlignment="Left"
+                                    Content="Open saved report…" />
+                        </StackPanel>
+
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Overview}">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE80F;" />
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="Overview" />
+                                    </DockPanel>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding HasResults}" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Findings}">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" />
+                                        <Border DockPanel.Dock="Right" Style="{StaticResource Count}" Background="{StaticResource HighSoft}"
+                                                Visibility="{Binding FlaggedFindingCount, Converter={StaticResource Vis}}">
+                                            <TextBlock Text="{Binding FlaggedFindingCount}" Style="{StaticResource CountText}" FontWeight="SemiBold" Foreground="{StaticResource High}" />
+                                        </Border>
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="All findings" />
+                                    </DockPanel>
+                                </RadioButton>
+
+                                <TextBlock Text="EXECUTION" Style="{StaticResource Caps}" Margin="12,16,0,6" />
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding HasResults}" IsChecked="{Binding FilesNav}"
+                                             ToolTip="Every program, jar, DLL and script, and the deleted ones - pick the kind at the top of the page">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE71D;" />
+                                        <Border DockPanel.Dock="Right" Style="{StaticResource Count}" Visibility="{Binding HasResults, Converter={StaticResource Vis}}">
+                                            <TextBlock Text="{Binding ProgramCount}" Style="{StaticResource CountText}" />
+                                        </Border>
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="Programs &amp; files" />
+                                    </DockPanel>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding HasResults}" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Commands}">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE756;" />
+                                        <Border DockPanel.Dock="Right" Style="{StaticResource Count}" Visibility="{Binding HasResults, Converter={StaticResource Vis}}">
+                                            <TextBlock Text="{Binding CommandCount}" Style="{StaticResource CountText}" />
+                                        </Border>
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="Commands" />
+                                    </DockPanel>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding Tamper.HasResults}" IsChecked="{Binding NavPage, Converter={StaticResource Is}, ConverterParameter=Tamper:Arguments}">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE756;" />
+                                        <Border DockPanel.Dock="Right" Style="{StaticResource Count}" Visibility="{Binding Tamper.FlaggedArguments, Converter={StaticResource Vis}}">
+                                            <TextBlock Text="{Binding Tamper.FlaggedArguments}" Style="{StaticResource CountText}" />
+                                        </Border>
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="Program arguments" />
+                                    </DockPanel>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding Tamper.HasResults}" IsChecked="{Binding NavPage, Converter={StaticResource Is}, ConverterParameter=Tamper:Usb}">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE88E;" />
+                                        <Border DockPanel.Dock="Right" Style="{StaticResource Count}" Background="{StaticResource Surface3}"
+                                                Visibility="{Binding Tamper.HasResults, Converter={StaticResource Vis}}">
+                                            <TextBlock Text="{Binding Tamper.UsbCount}" Style="{StaticResource CountText}" Foreground="{StaticResource TextSub}" FontWeight="Normal" />
+                                        </Border>
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="USB devices" />
+                                    </DockPanel>
+                                </RadioButton>
+
+                                <TextBlock Text="RECORDS" Style="{StaticResource Caps}" Margin="12,16,0,6" />
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding HasResults}" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Timeline}">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE81C;" />
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="Timeline" />
+                                    </DockPanel>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding HasResults}" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Memory}">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE950;" />
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="Memory strings" />
+                                    </DockPanel>
+                                </RadioButton>
+
+                                <!-- Tampering and bypasses: the same scan, shown by the Tampering view (Tamper.*). -->
+                                <TextBlock Text="TAMPERING" Style="{StaticResource Caps}" Margin="12,16,0,6" />
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding HasResults}" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Integrity}"
+                                             ToolTip="Is the evidence trustworthy? Every source's health, clock changes, and the evidence services with their history">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE72E;" />
+                                        <Border DockPanel.Dock="Right" Style="{StaticResource Count}" Background="{StaticResource MediumSoft}"
+                                                Visibility="{Binding IntegrityProblems, Converter={StaticResource Vis}}">
+                                            <TextBlock Text="{Binding IntegrityProblems}" Style="{StaticResource CountText}" FontWeight="SemiBold" Foreground="{StaticResource Medium}" />
+                                        </Border>
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="Integrity &amp; services" />
+                                    </DockPanel>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding Tamper.HasResults}" IsChecked="{Binding NavPage, Converter={StaticResource Is}, ConverterParameter=Tamper:Logs}">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE9F9;" />
+                                        <Border DockPanel.Dock="Right" Style="{StaticResource Count}" Visibility="{Binding Tamper.ProblemLogs, Converter={StaticResource Vis}}">
+                                            <TextBlock Text="{Binding Tamper.ProblemLogs}" Style="{StaticResource CountText}" />
+                                        </Border>
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="Event logs" />
+                                    </DockPanel>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource NavButton}" GroupName="nav" IsEnabled="{Binding Tamper.HasResults}" IsChecked="{Binding NavPage, Converter={StaticResource Is}, ConverterParameter=Tamper:Evidence}">
+                                    <DockPanel>
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE74D;" />
+                                        <Border DockPanel.Dock="Right" Style="{StaticResource Count}" Visibility="{Binding Tamper.FlaggedEvidence, Converter={StaticResource Vis}}">
+                                            <TextBlock Text="{Binding Tamper.FlaggedEvidence}" Style="{StaticResource CountText}" />
+                                        </Border>
+                                        <TextBlock Style="{StaticResource NavLabel}" Text="Evidence files" />
+                                    </DockPanel>
+                                </RadioButton>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+
+                <!-- ================= Content ================= -->
+                <Grid Grid.Column="1" Background="{StaticResource Bg}">
+
+                    <!-- ===== Start ===== -->
+                    <ScrollViewer Visibility="{Binding IsReady, Converter={StaticResource Vis}}" VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="1040" Margin="40,40,40,40">
+                            <TextBlock Text="Screenshare scan" Style="{StaticResource H1}" FontSize="30" />
+                            <TextBlock Style="{StaticResource Sub}" FontSize="14" Margin="0,8,0,0" LineHeight="21"
+                                       Text="Collects what Windows itself records about programs and commands that ran on this PC — Prefetch, BAM, PCA, UserAssist, ShimCache, Jump Lists, the USN journal, event logs, the Recycle Bin, shell history and process memory — and cross-checks the timestamps to expose deleted files, swapped files and clock tampering. It then checks whether those records can be trusted: cleared logs, stopped or frozen recording services, deleted evidence files, and record-erasing commands or launch arguments. It does not judge cheats by name — that is the job of Program Checker and Client Parser." />
+
+                            <Border Margin="0,22,0,0" CornerRadius="10" Padding="16,12" Background="{StaticResource HighSoft}"
+                                    BorderBrush="#5A2A30" BorderThickness="1"
+                                    Visibility="{Binding IsElevated, Converter={StaticResource Vis}, ConverterParameter=invert}">
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Command="{Binding RestartElevatedCommand}"
+                                            Content="Restart as administrator" VerticalAlignment="Center" Margin="12,0,0,0" />
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" Foreground="{StaticResource High}" Margin="0,0,12,0" />
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Not running as administrator" FontWeight="SemiBold" />
+                                        <TextBlock Style="{StaticResource Sub}" Text="Prefetch, BAM, the USN journal, the Security log and service memory need admin rights. A scan now is incomplete." />
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+
+                            <!-- Time range: how far back the results go -->
+                            <Border Style="{StaticResource Card}" Margin="0,26,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Time range" Style="{StaticResource H2}" />
+                                    <TextBlock Text="Show what happened in this period." Style="{StaticResource Sub}" Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,14,0,0">
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="window" IsChecked="{Binding ScanWindow, Converter={StaticResource Is}, ConverterParameter=ThisBoot}" Content="This boot" />
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="window" IsChecked="{Binding ScanWindow, Converter={StaticResource Is}, ConverterParameter=Day}" Content="24 hours" />
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="window" IsChecked="{Binding ScanWindow, Converter={StaticResource Is}, ConverterParameter=ThreeDays}" Content="3 days" />
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="window" IsChecked="{Binding ScanWindow, Converter={StaticResource Is}, ConverterParameter=Week}" Content="7 days" />
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="window" IsChecked="{Binding ScanWindow, Converter={StaticResource Is}, ConverterParameter=Month}" Content="30 days" />
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="window" IsChecked="{Binding ScanWindow, Converter={StaticResource Is}, ConverterParameter=All}" Content="Everything" />
+                                    </WrapPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="2,14,0,0">
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE7E8;" FontSize="12" Foreground="{StaticResource TextFaint}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                        <TextBlock Text="{Binding BootText}" Style="{StaticResource Sub}" FontSize="12" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Detection rules: defaults or a custom set for this screenshare -->
+                            <TextBlock Text="Detection rules" Style="{StaticResource H2}" Margin="0,26,0,4" />
+                            <TextBlock Style="{StaticResource Sub}" Text="Which record-tampering commands get flagged. History Parser judges by what a command does to the records, not by program names." />
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition />
+                                </Grid.ColumnDefinitions>
+                                <RadioButton Style="{StaticResource ChoiceCard}" GroupName="rules"
+                                             IsChecked="{Binding RulesMode, Converter={StaticResource Is}, ConverterParameter=Default}">
+                                    <StackPanel>
+                                        <TextBlock Text="Use default rules" FontWeight="SemiBold" FontSize="14" />
+                                        <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0">
+                                            <Run Text="{Binding RulesSourceLabel, Mode=OneWay}" /><Run Text=" — " /><Run Text="{Binding DefaultRulesSummary, Mode=OneWay}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </RadioButton>
+                                <RadioButton Grid.Column="2" Style="{StaticResource ChoiceCard}" GroupName="rules"
+                                             IsChecked="{Binding RulesMode, Converter={StaticResource Is}, ConverterParameter=Custom}">
+                                    <StackPanel>
+                                        <TextBlock Text="Customize rules" FontWeight="SemiBold" FontSize="14" />
+                                        <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0"
+                                                   Text="Edit the flagged commands and program-argument rules for this screenshare, or load your server's rules file." />
+                                    </StackPanel>
+                                </RadioButton>
+                            </Grid>
+
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0" Visibility="{Binding IsCustomRules, Converter={StaticResource Vis}}">
+                                <StackPanel>
+                                    <DockPanel>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
+                                            <Button Style="{StaticResource GhostButton}" Padding="12,6" FontSize="12.5" Command="{Binding LoadRulesCommand}" Margin="0,0,6,0"
+                                                    ToolTip="Load a rules file (for example one shared by your staff team)">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE8E5;" FontSize="12" Margin="0,0,7,0" />
+                                                    <TextBlock Text="Load file…" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Style="{StaticResource GhostButton}" Padding="12,6" FontSize="12.5" Command="{Binding SaveRulesCommand}" Margin="0,0,6,0"
+                                                    ToolTip="Save these rules to a file you can reuse or share">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE74E;" FontSize="12" Margin="0,0,7,0" />
+                                                    <TextBlock Text="Save file…" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Style="{StaticResource GhostButton}" Padding="12,6" FontSize="12.5" Command="{Binding ResetRulesCommand}"
+                                                    ToolTip="Put the built-in default rules back">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE72C;" FontSize="12" Margin="0,0,7,0" />
+                                                    <TextBlock Text="Reset to defaults" />
+                                                </StackPanel>
+                                            </Button>
+                                        </StackPanel>
+                                        <StackPanel>
+                                            <TextBlock Text="Custom rules" Style="{StaticResource H2}" />
+                                            <TextBlock Style="{StaticResource Sub}" Margin="0,3,0,0" Text="One entry per line. Lines starting with # are ignored." />
+                                        </StackPanel>
+                                    </DockPanel>
+
+                                    <Grid Margin="0,16,0,0">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="270" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock FontWeight="SemiBold" FontSize="13">
+                                            <Run Text="Flagged commands" /> <Run Text="{Binding CommandRuleCount, Mode=OneWay}" Foreground="{StaticResource TextFaint}" />
+                                        </TextBlock>
+                                        <TextBlock Grid.Row="1" Style="{StaticResource Sub}" FontSize="11.5" Margin="0,2,0,8">
+                                            <Run Text="Commands that erase or tamper with the execution records." /><Run Text="   ·   " /><Run Text="pattern => why it is flagged" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource Text}" /><Run Text="   ·   plain text matches anywhere; " /><Run Text="/regex/" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource Text}" /><Run Text=" for patterns" />
+                                        </TextBlock>
+                                        <TextBox Grid.Row="2" Style="{StaticResource EditorBox}" Text="{Binding CommandsText, UpdateSourceTrigger=PropertyChanged}" />
+                                    </Grid>
+
+                                    <TextBlock FontWeight="SemiBold" FontSize="13" Margin="0,16,0,0">
+                                        <Run Text="Program arguments" /> <Run Text="{Binding Tamper.ArgumentRuleCount, Mode=OneWay}" Foreground="{StaticResource TextFaint}" />
+                                    </TextBlock>
+                                    <TextBlock Style="{StaticResource Sub}" FontSize="11.5" Margin="0,2,0,8">
+                                        <Run Text="program: pattern => why it is flagged" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource Text}" /><Run Text="   ·   program is a file name like javaw.exe, or * for every program. Checked against running programs, process-creation logs and game / launcher logs (Program arguments page)." />
+                                    </TextBlock>
+                                    <TextBox Style="{StaticResource EditorBox}" Height="170" Text="{Binding Tamper.ArgumentsText, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Style="{StaticResource Sub}" FontSize="11.5" Margin="0,10,0,0" Foreground="{StaticResource TextFaint}"
+                                               Text="Names shorter than 6 letters must be a whole word of the file name (so &quot;drip&quot; does not match &quot;dripstone&quot;); longer names match anywhere. Nothing is saved on this PC unless you use Save file." />
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,12,0,0" CornerRadius="10" Padding="14,10" Background="{StaticResource HighSoft}"
+                                    BorderBrush="#5A2A30" BorderThickness="1" Visibility="{Binding RulesError, Converter={StaticResource Vis}}">
+                                <DockPanel>
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" Foreground="{StaticResource High}" Margin="0,0,10,0" VerticalAlignment="Top" />
+                                    <TextBlock Text="{Binding RulesError}" TextWrapping="Wrap" Foreground="{StaticResource Text}" FontSize="12.5" />
+                                </DockPanel>
+                            </Border>
+                            <Border Margin="0,12,0,0" CornerRadius="10" Padding="14,10" Background="{StaticResource HighSoft}"
+                                    BorderBrush="#5A2A30" BorderThickness="1" Visibility="{Binding Tamper.RulesError, Converter={StaticResource Vis}}">
+                                <DockPanel>
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" Foreground="{StaticResource High}" Margin="0,0,10,0" VerticalAlignment="Top" />
+                                    <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Text}" FontSize="12.5">
+                                        <Run Text="Program arguments:" FontWeight="SemiBold" /> <Run Text="{Binding Tamper.RulesError, Mode=OneWay}" />
+                                    </TextBlock>
+                                </DockPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,22,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Options" Style="{StaticResource H2}" />
+                                    <UniformGrid Columns="2" Margin="0,2,0,0">
+                                        <StackPanel Margin="0,12,28,4">
+                                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding ScanMemory}" Content="Scan memory" FontWeight="SemiBold" />
+                                            <TextBlock Text="Finds traces of programs in Explorer, Java and Windows services. Adds a few seconds." Style="{StaticResource Sub}" FontSize="12" TextWrapping="Wrap" Margin="58,3,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Margin="0,12,28,4">
+                                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding InspectFiles}" Content="Check signatures and hashes" FontWeight="SemiBold" />
+                                            <TextBlock Text="Spots disguised, renamed or modified programs. Turn off for a quicker scan." Style="{StaticResource Sub}" FontSize="12" TextWrapping="Wrap" Margin="58,3,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Margin="0,12,28,4">
+                                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding ReadGameLogs}" Content="Read Minecraft and launcher logs" FontWeight="SemiBold" />
+                                            <TextBlock Text="Checks launch arguments in up to 90 days of game and launcher logs. Adds a few seconds." Style="{StaticResource Sub}" FontSize="12" TextWrapping="Wrap" Margin="58,3,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Margin="0,12,28,4">
+                                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding HidePrivate}" Content="Hide private details in reports" FontWeight="SemiBold" />
+                                            <TextBlock Text="Saved reports mask the PC and user names and leave out personal history (the same switch is in the sidebar)." Style="{StaticResource Sub}" FontSize="12" TextWrapping="Wrap" Margin="58,3,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Margin="0,12,28,4">
+                                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding AutoSave}" Content="Save the report automatically" FontWeight="SemiBold" />
+                                            <TextBlock Text="Writes an HTML and a JSON report to a &quot;Screenshare reports&quot; folder on this Desktop when the scan ends." Style="{StaticResource Sub}" FontSize="12" TextWrapping="Wrap" Margin="58,3,0,0" />
+                                        </StackPanel>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
+                                <Button Style="{StaticResource PrimaryButton}" Command="{Binding StartScanCommand}" Padding="26,12" FontSize="14">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE768;" FontSize="13" Margin="0,0,10,0" />
+                                        <TextBlock Text="Start scan with default rules" Visibility="{Binding IsCustomRules, Converter={StaticResource Vis}, ConverterParameter=invert}" />
+                                        <TextBlock Text="Start scan with custom rules" Visibility="{Binding IsCustomRules, Converter={StaticResource Vis}}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource GhostButton}" Command="{Binding OpenReportCommand}" Padding="18,12" Margin="12,0,0,0" FontSize="14">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE8E5;" FontSize="13" Margin="0,0,10,0" />
+                                        <TextBlock Text="Open saved report" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource LinkButton}" Command="{Binding BackToResultsCommand}" Margin="18,0,0,0" VerticalAlignment="Center"
+                                        Content="← Back to the last results" FontSize="13" Visibility="{Binding HasPreviousResults, Converter={StaticResource Vis}}" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding Error}" Foreground="{StaticResource High}" Margin="0,14,0,0" TextWrapping="Wrap"
+                                       Visibility="{Binding Error, Converter={StaticResource Vis}}" />
+
+                            <Grid Margin="0,34,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition />
+                                    <ColumnDefinition />
+                                    <ColumnDefinition />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Margin="0,0,16,0">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE8D7;" Foreground="{StaticResource Accent}" HorizontalAlignment="Left" FontSize="18" />
+                                    <TextBlock Text="Read-only" FontWeight="SemiBold" Margin="0,8,0,4" />
+                                    <TextBlock Style="{StaticResource Sub}" Text="Nothing on this PC is changed, deleted or installed. No driver is loaded." />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="8,0">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE8CD;" Foreground="{StaticResource Accent}" HorizontalAlignment="Left" FontSize="18" />
+                                    <TextBlock Text="Offline" FontWeight="SemiBold" Margin="0,8,0,4" />
+                                    <TextBlock Style="{StaticResource Sub}" Text="The scan never connects to the internet. Reports are only saved where you choose." />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Margin="16,0,0,0">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE943;" Foreground="{StaticResource Accent}" HorizontalAlignment="Left" FontSize="18" />
+                                    <TextBlock Text="Open source" FontWeight="SemiBold" Margin="0,8,0,4" />
+                                    <TextBlock Style="{StaticResource Sub}" Text="Not obfuscated. Decompile it with ILSpy to check it matches the published source." />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- ===== Scanning ===== -->
+                    <Grid Visibility="{Binding IsScanning, Converter={StaticResource Vis}}">
+                        <StackPanel Width="480" VerticalAlignment="Center">
+                            <TextBlock Text="Scanning…" Style="{StaticResource H1}" />
+                            <TextBlock Text="{Binding ProgressText}" Style="{StaticResource Sub}" Margin="0,6,0,16" FontSize="13" />
+                            <ProgressBar Style="{StaticResource Bar}" Minimum="0" Maximum="1" Value="{Binding Progress}" />
+                            <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" FontSize="12" Foreground="{StaticResource TextFaint}"
+                                       Text="Usually 10–30 seconds. Nothing on this PC is changed." />
+                            <ItemsControl ItemsSource="{Binding ProgressLog}" Margin="0,18,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Margin="0,3">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE73E;" FontSize="11" Foreground="{StaticResource Ok}" Margin="0,0,10,0" />
+                                            <TextBlock Text="{Binding}" Foreground="{StaticResource TextSub}" FontSize="12.5" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- ===== Tampering pages (the same scan), picked from the sidebar ===== -->
+                    <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Tamper}" Panel.ZIndex="5">
+                        <tamper:TamperView DataContext="{Binding Tamper}" />
+                    </Grid>
+
+                    <!-- ===== Results ===== -->
+                    <Grid Visibility="{Binding HasResults, Converter={StaticResource Vis}}">
+
+                        <!-- Overview -->
+                        <ScrollViewer Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Overview}" VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="28,24,28,28">
+                                <TextBlock Text="Overview" Style="{StaticResource H1}" />
+                                <TextBlock Text="{Binding MachineLine}" Style="{StaticResource Sub}" Margin="0,4,0,0" FontSize="13" />
+                                <TextBlock Text="{Binding ScanLine}" Style="{StaticResource Sub}" Foreground="{StaticResource TextFaint}" Margin="0,2,0,0" />
+                                <WrapPanel Margin="0,14,0,0">
+                                    <Button Style="{StaticResource GhostButton}" Command="{Binding NavigateCommand}" CommandParameter="Tamper" Padding="14,8" Margin="0,0,8,0"
+                                            ToolTip="Integrity &amp; services, event logs, evidence files, USB and program arguments - whether the records can be trusted">
+                                        <TextBlock>
+                                            <Run Text="Tampering:" /> <Run Text="{Binding Tamper.FlaggedFindingCount, Mode=OneWay}" FontWeight="SemiBold" /> <Run Text="flagged →" />
+                                        </TextBlock>
+                                    </Button>
+                                    <Button Style="{StaticResource GhostButton}" Command="{Binding CheckRecentCommand}" Padding="14,8"
+                                            ToolTip="Opens the Program Checker (ProgramChecker.exe in the same folder) on the 50 most recently run programs, jars and scripts that still exist - each is checked for malware and cheat code.">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE721;" FontSize="12" Margin="0,0,8,0" />
+                                            <TextBlock Text="Check recent programs with Program Checker" />
+                                        </StackPanel>
+                                    </Button>
+                                </WrapPanel>
+
+                                <UniformGrid Columns="6" Margin="-5,20,-5,0">
+                                    <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Findings:High" ToolTip="Show High findings">
+                                        <StackPanel>
+                                            <TextBlock Text="High" Style="{StaticResource Caps}" />
+                                            <TextBlock Text="{Binding HighCount}" Style="{StaticResource StatValue}" Foreground="{StaticResource High}" />
+                                            <TextBlock Text="findings" Style="{StaticResource Sub}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Findings:Medium" ToolTip="Show Medium findings">
+                                        <StackPanel>
+                                            <TextBlock Text="Medium" Style="{StaticResource Caps}" />
+                                            <TextBlock Text="{Binding MediumCount}" Style="{StaticResource StatValue}" Foreground="{StaticResource Medium}" />
+                                            <TextBlock Text="findings" Style="{StaticResource Sub}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Inconsistencies" ToolTip="Show date inconsistencies">
+                                        <StackPanel>
+                                            <TextBlock Text="Dates" Style="{StaticResource Caps}" />
+                                            <TextBlock Text="{Binding InconsistencyCount}" Style="{StaticResource StatValue}" />
+                                            <TextBlock Text="inconsistencies" Style="{StaticResource Sub}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Deleted" ToolTip="Show deleted programs">
+                                        <StackPanel>
+                                            <TextBlock Text="Deleted" Style="{StaticResource Caps}" />
+                                            <TextBlock Text="{Binding DeletedCount}" Style="{StaticResource StatValue}" />
+                                            <TextBlock Text="ran, now gone" Style="{StaticResource Sub}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Programs" ToolTip="Show all programs that ran">
+                                        <StackPanel>
+                                            <TextBlock Text="Programs" Style="{StaticResource Caps}" />
+                                            <TextBlock Text="{Binding ProgramCount}" Style="{StaticResource StatValue}" />
+                                            <TextBlock Text="ran" Style="{StaticResource Sub}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource CardButton}" Margin="5" Command="{Binding NavigateCommand}" CommandParameter="Commands:Suspicious" ToolTip="Show flagged commands">
+                                        <StackPanel>
+                                            <TextBlock Text="Commands" Style="{StaticResource Caps}" />
+                                            <TextBlock Text="{Binding SuspiciousCommandCount}" Style="{StaticResource StatValue}" />
+                                            <TextBlock Text="flagged" Style="{StaticResource Sub}" />
+                                        </StackPanel>
+                                    </Button>
+                                </UniformGrid>
+
+                                <Grid Margin="0,22,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="3*" />
+                                        <ColumnDefinition Width="20" />
+                                        <ColumnDefinition Width="2*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <DockPanel Margin="0,0,0,10">
+                                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="All findings →"
+                                                    Command="{Binding NavigateCommand}" CommandParameter="Findings" VerticalAlignment="Center" />
+                                            <TextBlock Text="Top findings" Style="{StaticResource H2}" />
+                                        </DockPanel>
+                                        <ItemsControl ItemsSource="{Binding TopFindings}" ItemTemplate="{StaticResource FindingCard}">
+                                            <ItemsControl.ItemContainerStyle>
+                                                <Style TargetType="ContentPresenter">
+                                                    <Setter Property="Margin" Value="0,0,0,8" />
+                                                </Style>
+                                            </ItemsControl.ItemContainerStyle>
+                                        </ItemsControl>
+                                        <Border Style="{StaticResource Card}" Visibility="{Binding TopFindings, Converter={StaticResource Vis}, ConverterParameter=invert}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Style="{StaticResource Icon}" Text="&#xE73E;" Foreground="{StaticResource Ok}" Margin="0,0,10,0" />
+                                                <TextBlock Text="No findings." />
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <DockPanel Margin="0,0,0,10">
+                                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="All checks →"
+                                                    Command="{Binding NavigateCommand}" CommandParameter="Integrity" VerticalAlignment="Center" />
+                                            <TextBlock Text="Evidence integrity" Style="{StaticResource H2}" />
+                                        </DockPanel>
+                                        <Border Style="{StaticResource Card}" Padding="6">
+                                            <StackPanel>
+                                                <ItemsControl ItemsSource="{Binding ProblemChecks}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid Margin="10,9">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                    <ColumnDefinition Width="*" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <Ellipse Width="8" Height="8" Margin="0,5,12,0" VerticalAlignment="Top" Fill="{Binding State, Converter={StaticResource Tone}}" />
+                                                                <StackPanel Grid.Column="1">
+                                                                    <TextBlock FontWeight="SemiBold" FontSize="13">
+                                                                        <Run Text="{Binding Area, Mode=OneWay}" Foreground="{StaticResource TextFaint}" /><Run Text="  " /><Run Text="{Binding Name, Mode=OneWay}" />
+                                                                    </TextBlock>
+                                                                    <TextBlock Text="{Binding Detail}" Style="{StaticResource Sub}" Margin="0,3,0,0" />
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <StackPanel Orientation="Horizontal" Margin="10,9" Visibility="{Binding ProblemChecks, Converter={StaticResource Vis}, ConverterParameter=invert}">
+                                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE73E;" Foreground="{StaticResource Ok}" Margin="0,0,10,0" />
+                                                    <TextBlock Text="All evidence sources look healthy." />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- File pages: All programs / Executables / DLLs / JARs / Deleted -->
+                        <Grid Visibility="{Binding IsFilePage, Converter={StaticResource Vis}}" Margin="28,22,28,22">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Right" VerticalAlignment="Bottom" Style="{StaticResource Sub}">
+                                    <Run Text="{Binding VisibleFiles, Mode=OneWay, StringFormat=N0}" /> <Run Text="shown" />
+                                </TextBlock>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding FilePageTitle}" Style="{StaticResource H1}" />
+                                    <TextBlock Text="{Binding FilePageSubtitle}" Style="{StaticResource Sub}" Margin="0,4,0,0" />
+                                    <!-- One sidebar entry; the kind of file is picked here. -->
+                                    <WrapPanel Margin="0,12,0,0">
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="filekind" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Programs}">
+                                            <TextBlock><Run Text="All programs" /> <Run Text="{Binding ProgramCount, Mode=OneWay}" Foreground="{StaticResource TextFaint}" /></TextBlock>
+                                        </RadioButton>
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="filekind" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Executables}">
+                                            <TextBlock><Run Text="Executables" /> <Run Text="{Binding ExeCount, Mode=OneWay}" Foreground="{StaticResource TextFaint}" /></TextBlock>
+                                        </RadioButton>
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="filekind" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Jars}">
+                                            <TextBlock><Run Text="JARs" /> <Run Text="{Binding JarCount, Mode=OneWay}" Foreground="{StaticResource TextFaint}" /></TextBlock>
+                                        </RadioButton>
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="filekind" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Dlls}">
+                                            <TextBlock><Run Text="DLLs" /> <Run Text="{Binding DllCount, Mode=OneWay}" Foreground="{StaticResource TextFaint}" /></TextBlock>
+                                        </RadioButton>
+                                        <RadioButton Style="{StaticResource Chip}" GroupName="filekind" IsChecked="{Binding Page, Converter={StaticResource Is}, ConverterParameter=Deleted}">
+                                            <TextBlock><Run Text="Deleted" /> <Run Text="{Binding DeletedCount, Mode=OneWay}" Foreground="{StaticResource TextFaint}" /></TextBlock>
+                                        </RadioButton>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </DockPanel>
+                            <WrapPanel Grid.Row="1" Margin="0,14,0,0" VerticalAlignment="Center">
+                                <TextBox x:Name="FileSearchBox" Style="{StaticResource SearchBox}" Width="280" Tag="Search name, path, hash, source…  (Ctrl+F)"
+                                         Text="{Binding FileSearch, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,16,8" />
+                                <CheckBox Style="{StaticResource Switch}" Content="Flagged" IsChecked="{Binding FlaggedOnly}" Margin="0,0,16,8" VerticalAlignment="Center"
+                                          ToolTip="Only files with a finding" />
+                                <CheckBox Style="{StaticResource Switch}" Content="Ran" IsChecked="{Binding RanOnly}" Margin="0,0,16,8" VerticalAlignment="Center"
+                                          ToolTip="Only files that were started or loaded (hide ones only seen in caches or memory)" />
+                                <CheckBox Style="{StaticResource Switch}" Content="Gone" IsChecked="{Binding GoneOnly}" Margin="0,0,16,8" VerticalAlignment="Center"
+                                          ToolTip="Only deleted, recycled, renamed or missing files" Visibility="{Binding ShowGoneToggle, Converter={StaticResource Vis}}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="Windows files" IsChecked="{Binding IncludeWindows}" Margin="0,0,16,8" VerticalAlignment="Center"
+                                          ToolTip="Include files inside C:\Windows" />
+                                <CheckBox Style="{StaticResource Switch}" Content="By this program" IsChecked="{Binding ShowOwnTraces}" Margin="0,0,0,8" VerticalAlignment="Center"
+                                          ToolTip="Show this suite's own programs (History Parser, Program Checker, Client Parser, Malware Checker, Cheat String Finder) and the runtime files they unpack. Only exact copies from this build count; they are never counted as findings." />
+                            </WrapPanel>
+
+                            <Grid Grid.Row="3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="16" />
+                                    <ColumnDefinition Width="350" />
+                                </Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                    <Grid>
+                                        <DataGrid x:Name="FilesGrid" ItemsSource="{Binding FilesView}" SelectedItem="{Binding SelectedFile}" Tag="No files here for the chosen time range, search and filters."
+                                                  SelectionChanged="FilesGrid_SelectionChanged" ClipboardCopyMode="None">
+                                            <DataGrid.ContextMenu>
+                                                <ContextMenu>
+                                                    <MenuItem Header="Copy path" InputGestureText="Ctrl+C"
+                                                              Command="{Binding PlacementTarget.DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.SelectedItem.Path, RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                        <MenuItem.Icon><TextBlock Style="{StaticResource Icon}" Text="&#xE8C8;" FontSize="13" /></MenuItem.Icon>
+                                                    </MenuItem>
+                                                    <MenuItem Header="Copy file name"
+                                                              Command="{Binding PlacementTarget.DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.SelectedItem.Name, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                                    <MenuItem Header="Copy SHA-256"
+                                                              Command="{Binding PlacementTarget.DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.SelectedItem.Sha256, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                                    <Separator />
+                                                    <MenuItem Header="Open file location"
+                                                              Command="{Binding PlacementTarget.DataContext.OpenLocationCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.SelectedItem.Path, RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                        <MenuItem.Icon><TextBlock Style="{StaticResource Icon}" Text="&#xE838;" FontSize="13" /></MenuItem.Icon>
+                                                    </MenuItem>
+                                                    <MenuItem Header="Look up hash on VirusTotal (browser)"
+                                                              Command="{Binding PlacementTarget.DataContext.VirusTotalCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.SelectedItem.Sha256, RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                        <MenuItem.Icon><TextBlock Style="{StaticResource Icon}" Text="&#xE774;" FontSize="13" /></MenuItem.Icon>
+                                                    </MenuItem>
+                                                </ContextMenu>
+                                            </DataGrid.ContextMenu>
+                                            <DataGrid.Columns>
+                                                <DataGridTemplateColumn Header="" Width="34" MinWidth="34" SortMemberPath="SeverityRank" CanUserResize="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <Ellipse Width="8" Height="8" Fill="{Binding Severity, Converter={StaticResource Tone}}"
+                                                                     Visibility="{Binding Severity, Converter={StaticResource Vis}}" ToolTip="{Binding Severity}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Name" Width="180" MinWidth="110" SortMemberPath="Name">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding Name}" Style="{StaticResource CellText}" FontWeight="SemiBold" ToolTip="{Binding Path}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Type" Width="58" MinWidth="58" SortMemberPath="TypeText">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding TypeText}" Style="{StaticResource CellSub}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Last run" Width="154" MinWidth="154" SortMemberPath="LastRunKey">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding LastRun, Converter={StaticResource Time}}" Style="{StaticResource CellMono}" Foreground="{StaticResource Text}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Runs" Width="58" MinWidth="58" SortMemberPath="RunCount">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding RunCount}" Style="{StaticResource CellSub}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Status" Width="104" MinWidth="104" SortMemberPath="Status">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <Border CornerRadius="9" Padding="8,2" HorizontalAlignment="Left" ToolTip="{Binding StatusDetail}"
+                                                                    Background="{Binding Status, Converter={StaticResource Tone}, ConverterParameter=soft}">
+                                                                <TextBlock Text="{Binding Status, Converter={StaticResource StatusText}}" FontSize="11" FontWeight="SemiBold"
+                                                                           Foreground="{Binding Status, Converter={StaticResource Tone}}" />
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Sources" Width="130" MinWidth="80" SortMemberPath="SourceCount">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding SourcesText}" Style="{StaticResource CellSub}" ToolTip="{Binding SourcesText}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Signed" Width="84" MinWidth="84" SortMemberPath="Signature">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding Signature, Converter={StaticResource StatusText}}" Style="{StaticResource CellSub}" ToolTip="{Binding Signer}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Path" Width="*" MinWidth="160" SortMemberPath="Path">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding Path}" Style="{StaticResource CellMono}" ToolTip="{Binding Path}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </Grid>
+                                </Border>
+
+                                <!-- Detail panel -->
+                                <Border Grid.Column="2" Style="{StaticResource Card}" Padding="0">
+                                    <Grid>
+                                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                                                    Visibility="{Binding SelectedFile, Converter={StaticResource Vis}, ConverterParameter=invert}">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE8A5;" FontSize="28" Foreground="{StaticResource TextFaint}" HorizontalAlignment="Center" />
+                                            <TextBlock Text="Select a file to see every record of it" Style="{StaticResource Sub}" Margin="0,10,0,0" />
+                                        </StackPanel>
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding SelectedFile, Converter={StaticResource Vis}}">
+                                            <StackPanel Margin="18" DataContext="{Binding SelectedFile}">
+                                                <TextBlock Text="{Binding Name}" Style="{StaticResource H2}" FontSize="17" TextWrapping="Wrap" />
+                                                <TextBox Text="{Binding Path, Mode=OneWay}" Style="{StaticResource SelectableText}" FontFamily="{StaticResource MonoFont}"
+                                                         FontSize="11.5" Foreground="{StaticResource TextSub}" Margin="0,6,0,0" />
+                                                <WrapPanel Margin="0,12,0,0">
+                                                    <Border CornerRadius="9" Padding="8,2" Margin="0,0,6,6" Background="{Binding Status, Converter={StaticResource Tone}, ConverterParameter=soft}">
+                                                        <TextBlock Text="{Binding Status, Converter={StaticResource StatusText}}" FontSize="11" FontWeight="SemiBold"
+                                                                   Foreground="{Binding Status, Converter={StaticResource Tone}}" />
+                                                    </Border>
+                                                    <Border CornerRadius="9" Padding="8,2" Margin="0,0,6,6" Background="{StaticResource NeutralSoft}">
+                                                        <TextBlock Text="{Binding TypeText}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSub}" />
+                                                    </Border>
+                                                    <Border CornerRadius="9" Padding="8,2" Margin="0,0,6,6" Background="{StaticResource NeutralSoft}">
+                                                        <TextBlock Text="{Binding HowText}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSub}" />
+                                                    </Border>
+                                                </WrapPanel>
+                                                <TextBlock Text="{Binding StatusDetail}" Style="{StaticResource Sub}" Margin="0,2,0,0" />
+                                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                                    <Button Style="{StaticResource GhostButton}" Padding="10,5" FontSize="12" Content="Copy path" Margin="0,0,6,0"
+                                                            Command="{Binding DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding Path}" />
+                                                    <Button Style="{StaticResource GhostButton}" Padding="10,5" FontSize="12" Content="Open location"
+                                                            Command="{Binding DataContext.OpenLocationCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding Path}" />
+                                                </StackPanel>
+
+                                                <Grid Margin="0,14,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="92" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                    </Grid.RowDefinitions>
+                                                    <TextBlock Grid.Row="7" Text="Downloaded" Style="{StaticResource Sub}" Margin="0,6,0,0"
+                                                               Visibility="{Binding Record.DownloadedFrom, Converter={StaticResource Vis}}" />
+                                                    <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding Record.DownloadedFrom, Mode=OneWay}" Style="{StaticResource SelectableText}"
+                                                             FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" Visibility="{Binding Record.DownloadedFrom, Converter={StaticResource Vis}}" />
+                                                    <TextBlock Text="Last run" Style="{StaticResource Sub}" Margin="0,0,0,6" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding LastRun, Converter={StaticResource Time}}" FontFamily="{StaticResource MonoFont}" FontSize="12" />
+                                                    <TextBlock Grid.Row="1" Text="Run count" Style="{StaticResource Sub}" Margin="0,0,0,6" />
+                                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding RunCount, TargetNullValue=—}" FontSize="12.5" />
+                                                    <TextBlock Grid.Row="2" Text="Signature" Style="{StaticResource Sub}" Margin="0,0,0,6" />
+                                                    <TextBlock Grid.Row="2" Grid.Column="1" FontSize="12.5" TextWrapping="Wrap">
+                                                        <Run Text="{Binding Signature, Converter={StaticResource StatusText}, Mode=OneWay}" />
+                                                        <Run Text="{Binding Signer, Mode=OneWay}" Foreground="{StaticResource TextSub}" />
+                                                    </TextBlock>
+                                                    <TextBlock Grid.Row="3" Text="Size" Style="{StaticResource Sub}" Margin="0,0,0,6" />
+                                                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SizeText}" FontSize="12.5" />
+                                                    <TextBlock Grid.Row="4" Text="SHA-256" Style="{StaticResource Sub}" />
+                                                    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Sha256, Mode=OneWay, TargetNullValue=—}" Style="{StaticResource SelectableText}"
+                                                             FontFamily="{StaticResource MonoFont}" FontSize="11" />
+                                                    <TextBlock Grid.Row="5" Text="Built as" Style="{StaticResource Sub}" Margin="0,6,0,0"
+                                                               Visibility="{Binding VersionText, Converter={StaticResource Vis}}" />
+                                                    <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding VersionText}" FontSize="12.5" TextWrapping="Wrap" Margin="0,6,0,0"
+                                                               Visibility="{Binding VersionText, Converter={StaticResource Vis}}" />
+                                                    <TextBlock Grid.Row="6" Text="NTFS dates" Style="{StaticResource Sub}" Margin="0,6,0,0"
+                                                               Visibility="{Binding NtfsText, Converter={StaticResource Vis}}" />
+                                                    <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding NtfsText}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                                               TextWrapping="Wrap" Margin="0,6,0,0" Visibility="{Binding NtfsText, Converter={StaticResource Vis}}" />
+                                                </Grid>
+
+                                                <TextBlock Text="FINDINGS" Style="{StaticResource Caps}" Margin="0,20,0,8"
+                                                           Visibility="{Binding Findings, Converter={StaticResource Vis}}" />
+                                                <ItemsControl ItemsSource="{Binding Findings}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border CornerRadius="8" Padding="12,10" Margin="0,0,0,8"
+                                                                    Background="{Binding Severity, Converter={StaticResource Tone}, ConverterParameter=soft}">
+                                                                <StackPanel>
+                                                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12.5" TextWrapping="Wrap"
+                                                                               Foreground="{Binding Severity, Converter={StaticResource Tone}}" />
+                                                                    <TextBlock Text="{Binding Detail}" Style="{StaticResource Sub}" Foreground="{StaticResource Text}" Margin="0,4,0,0" FontSize="12" />
+                                                                </StackPanel>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+
+                                                <TextBlock Text="EVIDENCE" Style="{StaticResource Caps}" Margin="0,16,0,8" />
+                                                <ItemsControl ItemsSource="{Binding Evidence}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid Margin="0,0,0,10">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                    <ColumnDefinition Width="*" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <Border Width="74" CornerRadius="6" Padding="0,3" Background="{StaticResource Surface3}" VerticalAlignment="Top">
+                                                                    <TextBlock Text="{Binding SourceText}" FontSize="10.5" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="{StaticResource TextSub}" />
+                                                                </Border>
+                                                                <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                                                                    <TextBlock FontSize="12">
+                                                                        <Run Text="{Binding KindText, Mode=OneWay}" FontWeight="SemiBold" />
+                                                                        <Run Text="  " />
+                                                                        <Run Text="{Binding Time, Converter={StaticResource Time}, Mode=OneWay}" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource TextSub}" />
+                                                                    </TextBlock>
+                                                                    <TextBlock Text="{Binding Detail}" Style="{StaticResource Sub}" FontSize="11.5" Margin="0,2,0,0" />
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </Grid>
+                                </Border>
+                            </Grid>
+                        </Grid>
+
+                        <!-- Findings & Inconsistencies -->
+                        <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Findings}" Margin="28,22,28,22">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Bottom">
+                                    <Button Style="{StaticResource LinkButton}" Command="{Binding NavigateCommand}" CommandParameter="Inconsistencies" Margin="0,0,18,0">
+                                        <TextBlock><Run Text="Timeline inconsistencies" /> <Run Text="{Binding InconsistencyCount, Mode=OneWay}" /> <Run Text="→" /></TextBlock>
+                                    </Button>
+                                    <Button Style="{StaticResource LinkButton}" Command="{Binding NavigateCommand}" CommandParameter="Tamper:Overview" Content="Tampering summary →" />
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Text="All findings" Style="{StaticResource H1}" />
+                                    <TextBlock Text="Leads to investigate, strongest first - executions and tampering together. High means something that cannot happen on an untouched PC; check the evidence before deciding. Low findings are context: pick All or Low to see them."
+                                               Style="{StaticResource Sub}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DockPanel>
+                            <WrapPanel Grid.Row="1" Margin="0,14,0,12">
+                                <TextBox x:Name="FindingSearchBox" Style="{StaticResource SearchBox}" Width="300" Tag="Search findings…  (Ctrl+F)"
+                                         Text="{Binding FindingSearch, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,14,0" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="sev" IsChecked="{Binding FindingSeverity, Converter={StaticResource Is}, ConverterParameter=Leads}">
+                                    <TextBlock><Run Text="High + Medium " /><Run Text="{Binding FlaggedFindingCount, Mode=OneWay}" Foreground="{StaticResource TextFaint}" /></TextBlock>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource Chip}" GroupName="sev" Content="All" IsChecked="{Binding FindingSeverity, Converter={StaticResource Is}, ConverterParameter=All}" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="sev" IsChecked="{Binding FindingSeverity, Converter={StaticResource Is}, ConverterParameter=High}">
+                                    <TextBlock><Run Text="High " /><Run Text="{Binding HighCount, Mode=OneWay}" Foreground="{StaticResource High}" /></TextBlock>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource Chip}" GroupName="sev" IsChecked="{Binding FindingSeverity, Converter={StaticResource Is}, ConverterParameter=Medium}">
+                                    <TextBlock><Run Text="Medium " /><Run Text="{Binding MediumCount, Mode=OneWay}" Foreground="{StaticResource Medium}" /></TextBlock>
+                                </RadioButton>
+                                <RadioButton Style="{StaticResource Chip}" GroupName="sev" IsChecked="{Binding FindingSeverity, Converter={StaticResource Is}, ConverterParameter=Low}">
+                                    <TextBlock><Run Text="Low " /><Run Text="{Binding LowCount, Mode=OneWay}" Foreground="{StaticResource Low}" /></TextBlock>
+                                </RadioButton>
+                                <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding ShowOwnTraces}" Margin="16,0,0,0" VerticalAlignment="Center"
+                                          ToolTip="Show traces this suite's own programs left (their runs, unpacked runtime, launcher). They never count as findings.">
+                                    <TextBlock><Run Text="By this program " /><Run Text="{Binding OwnTraceCount, Mode=OneWay}" Foreground="{StaticResource TextFaint}" /></TextBlock>
+                                </CheckBox>
+                            </WrapPanel>
+                            <ListBox Grid.Row="2" Style="{StaticResource PlainList}" ItemsSource="{Binding FindingsView}" ItemTemplate="{StaticResource FindingCard}" />
+                        </Grid>
+
+                        <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Inconsistencies}" Margin="28,22,28,22">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Date inconsistencies" Style="{StaticResource H1}" />
+                                <TextBlock Text="Places where the sources disagree about when something happened: clock changes, runs recorded after a deletion, launches missing from Prefetch, files swapped after they ran."
+                                           Style="{StaticResource Sub}" Margin="0,4,0,0" />
+                            </StackPanel>
+                            <WrapPanel Grid.Row="1" Margin="0,14,0,12">
+                                <TextBox x:Name="InconsistencySearchBox" Style="{StaticResource SearchBox}" Width="300" Tag="Search…  (Ctrl+F)"
+                                         Text="{Binding FindingSearch, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,14,0" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="isev" Content="All" IsChecked="{Binding FindingSeverity, Converter={StaticResource Is}, ConverterParameter=All}" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="isev" Content="High" IsChecked="{Binding FindingSeverity, Converter={StaticResource Is}, ConverterParameter=High}" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="isev" Content="Medium" IsChecked="{Binding FindingSeverity, Converter={StaticResource Is}, ConverterParameter=Medium}" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="isev" Content="Low" IsChecked="{Binding FindingSeverity, Converter={StaticResource Is}, ConverterParameter=Low}" />
+                            </WrapPanel>
+                            <Grid Grid.Row="2">
+                                <ListBox Style="{StaticResource PlainList}" ItemsSource="{Binding InconsistencyView}" ItemTemplate="{StaticResource FindingCard}" Tag="" />
+                                <Border Style="{StaticResource Card}" VerticalAlignment="Top"
+                                        Visibility="{Binding InconsistencyCount, Converter={StaticResource Vis}, ConverterParameter=invert}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE73E;" Foreground="{StaticResource Ok}" Margin="0,0,10,0" />
+                                        <TextBlock Text="All sources agree on when things happened." />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Grid>
+
+                        <!-- Commands -->
+                        <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Commands}" Margin="28,22,28,22">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Right" VerticalAlignment="Bottom" Style="{StaticResource Sub}">
+                                    <Run Text="{Binding VisibleCommands, Mode=OneWay, StringFormat=N0}" /> <Run Text="shown" />
+                                </TextBlock>
+                                <StackPanel>
+                                    <TextBlock Text="Command history" Style="{StaticResource H1}" />
+                                    <TextBlock Text="PowerShell history, open cmd / terminal windows, Windows Terminal tabs, Git Bash, the Run box, Explorer, running shells and the PowerShell event logs. Flagged commands come first."
+                                               Style="{StaticResource Sub}" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </DockPanel>
+                            <WrapPanel Grid.Row="1" Margin="0,14,0,12">
+                                <TextBox x:Name="CommandSearchBox" Style="{StaticResource SearchBox}" Width="280" Tag="Search commands…  (Ctrl+F)"
+                                         Text="{Binding CommandSearch, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,14,8" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="cgroup" Content="All" IsChecked="{Binding CommandGroup, Converter={StaticResource Is}, ConverterParameter=All}" Margin="0,0,6,8" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="cgroup" Content="PowerShell" IsChecked="{Binding CommandGroup, Converter={StaticResource Is}, ConverterParameter=PowerShell}" Margin="0,0,6,8" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="cgroup" Content="CMD / Terminal" IsChecked="{Binding CommandGroup, Converter={StaticResource Is}, ConverterParameter='CMD / Terminal'}" Margin="0,0,6,8" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="cgroup" Content="Run box" IsChecked="{Binding CommandGroup, Converter={StaticResource Is}, ConverterParameter='Run box'}" Margin="0,0,6,8" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="cgroup" Content="Explorer" IsChecked="{Binding CommandGroup, Converter={StaticResource Is}, ConverterParameter=Explorer}" Margin="0,0,6,8" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="cgroup" Content="Bash" IsChecked="{Binding CommandGroup, Converter={StaticResource Is}, ConverterParameter=Bash}" Margin="0,0,6,8" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="cgroup" Content="Running now" IsChecked="{Binding CommandGroup, Converter={StaticResource Is}, ConverterParameter=Running}" Margin="0,0,6,8" />
+                                <RadioButton Style="{StaticResource Chip}" GroupName="cgroup" Content="Event logs" IsChecked="{Binding CommandGroup, Converter={StaticResource Is}, ConverterParameter='Event log'}" Margin="0,0,18,8" />
+                                <CheckBox Style="{StaticResource Switch}" Content="Flagged only" IsChecked="{Binding SuspiciousOnly}" VerticalAlignment="Center" Margin="0,0,0,8" />
+                            </WrapPanel>
+                            <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <Grid>
+                                    <DataGrid x:Name="CommandsGrid" ItemsSource="{Binding CommandsView}" ClipboardCopyMode="None" Tag="No commands here for the chosen time range, search and filters.">
+                                        <DataGrid.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Copy command" InputGestureText="Ctrl+C"
+                                                          Command="{Binding PlacementTarget.DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                          CommandParameter="{Binding PlacementTarget.SelectedItem.Command, RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                    <MenuItem.Icon><TextBlock Style="{StaticResource Icon}" Text="&#xE8C8;" FontSize="13" /></MenuItem.Icon>
+                                                </MenuItem>
+                                            </ContextMenu>
+                                        </DataGrid.ContextMenu>
+                                        <DataGrid.Columns>
+                                            <DataGridTemplateColumn Header="" Width="34" MinWidth="34" SortMemberPath="IsSuspicious" CanUserResize="False">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <Ellipse Width="8" Height="8" Fill="{StaticResource Medium}" ToolTip="{Binding Suspicion}"
+                                                                 Visibility="{Binding IsSuspicious, Converter={StaticResource Vis}}" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTemplateColumn Header="Time" Width="154" MinWidth="154" SortMemberPath="Time">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Time, Converter={StaticResource Time}}" Style="{StaticResource CellMono}" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTemplateColumn Header="Source" Width="230" MinWidth="120" SortMemberPath="Source">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Source}" Style="{StaticResource CellSub}" ToolTip="{Binding Detail}" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTemplateColumn Header="User" Width="110" MinWidth="70" SortMemberPath="User">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding User}" Style="{StaticResource CellSub}" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTemplateColumn Header="Command" Width="*" MinWidth="240" SortMemberPath="Command">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Command}" Style="{StaticResource CellMono}" Foreground="{StaticResource Text}" ToolTip="{Binding Command}" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTemplateColumn Header="Why flagged" Width="200" MinWidth="100" SortMemberPath="Suspicion">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Suspicion}" Style="{StaticResource CellText}" Foreground="{StaticResource Medium}" ToolTip="{Binding Suspicion}" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Timeline -->
+                        <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Timeline}" Margin="28,22,28,22">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Right" VerticalAlignment="Bottom" Style="{StaticResource Sub}">
+                                    <Run Text="{Binding VisibleTimeline, Mode=OneWay, StringFormat=N0}" /> <Run Text="events shown" />
+                                </TextBlock>
+                                <StackPanel>
+                                    <TextBlock Text="Timeline" Style="{StaticResource H1}" />
+                                    <TextBlock Text="Every record from every source in one list, newest first." Style="{StaticResource Sub}" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </DockPanel>
+                            <WrapPanel Grid.Row="1" Margin="0,14,0,12">
+                                <TextBox x:Name="TimelineSearchBox" Style="{StaticResource SearchBox}" Width="320" Tag="Search path, source or detail…  (Ctrl+F)"
+                                         Text="{Binding TimelineSearch, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,16,0" />
+                                <CheckBox Style="{StaticResource Switch}" Content="Windows files" IsChecked="{Binding TimelineIncludeWindows}" VerticalAlignment="Center" />
+                            </WrapPanel>
+                            <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <DataGrid x:Name="TimelineGrid" ItemsSource="{Binding TimelineView}" ClipboardCopyMode="None">
+                                    <DataGrid.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Copy path" InputGestureText="Ctrl+C"
+                                                      Command="{Binding PlacementTarget.DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.SelectedItem.Path, RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                <MenuItem.Icon><TextBlock Style="{StaticResource Icon}" Text="&#xE8C8;" FontSize="13" /></MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem Header="Copy detail"
+                                                      Command="{Binding PlacementTarget.DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.SelectedItem.Detail, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                            <Separator />
+                                            <MenuItem Header="Show file record"
+                                                      Command="{Binding PlacementTarget.DataContext.ShowFileCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.SelectedItem.Path, RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                <MenuItem.Icon><TextBlock Style="{StaticResource Icon}" Text="&#xE8A5;" FontSize="13" /></MenuItem.Icon>
+                                            </MenuItem>
+                                        </ContextMenu>
+                                    </DataGrid.ContextMenu>
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="Time" Width="154" MinWidth="154" SortMemberPath="Time">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Time, Converter={StaticResource Time}}" Style="{StaticResource CellMono}" Foreground="{StaticResource Text}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Source" Width="96" MinWidth="80" SortMemberPath="SourceText">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding SourceText}" Style="{StaticResource CellSub}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Event" Width="104" MinWidth="80" SortMemberPath="KindText">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding KindText}" Style="{StaticResource CellText}" FontWeight="SemiBold" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="File / item" Width="2*" MinWidth="200" SortMemberPath="Path">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Path}" Style="{StaticResource CellMono}" Foreground="{StaticResource Text}" ToolTip="{Binding Path}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Detail" Width="2*" MinWidth="160" SortMemberPath="Detail">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Detail}" Style="{StaticResource CellSub}" ToolTip="{Binding Detail}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Memory -->
+                        <Grid Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Memory}" Margin="28,22,28,22">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Memory strings" Style="{StaticResource H1}" />
+                                <TextBlock Text="Program paths found in the memory of Explorer, DPS, PcaSvc, DiagTrack, Appinfo, DcomLaunch and running Java processes — they survive file deletion until the process restarts."
+                                           Style="{StaticResource Sub}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <TextBox x:Name="MemorySearchBox" Grid.Row="1" Style="{StaticResource SearchBox}" Width="340" HorizontalAlignment="Left" Margin="0,14,0,12"
+                                     Tag="Search path or process…  (Ctrl+F)" Text="{Binding MemorySearch, UpdateSourceTrigger=PropertyChanged}" />
+                            <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                                <DataGrid x:Name="MemoryGrid" ItemsSource="{Binding MemoryView}" ClipboardCopyMode="None">
+                                    <DataGrid.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Copy path" InputGestureText="Ctrl+C"
+                                                      Command="{Binding PlacementTarget.DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.SelectedItem.Path, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                            <MenuItem Header="Copy raw string"
+                                                      Command="{Binding PlacementTarget.DataContext.CopyCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.SelectedItem.Raw, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                        </ContextMenu>
+                                    </DataGrid.ContextMenu>
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="Process" Width="190" MinWidth="120" SortMemberPath="Process">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Style="{StaticResource CellText}">
+                                                        <Run Text="{Binding Process, Mode=OneWay}" FontWeight="SemiBold" />
+                                                        <Run Text="{Binding Pid, Mode=OneWay}" Foreground="{StaticResource TextFaint}" />
+                                                    </TextBlock>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Path" Width="2*" MinWidth="200" SortMemberPath="Path">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Style="{StaticResource CellMono}" Foreground="{StaticResource Text}" ToolTip="{Binding Raw}"
+                                                               Text="{Binding Path, Mode=OneWay}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Recorded time (DPS)" Width="170" MinWidth="120" SortMemberPath="RecordedTime">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding RecordedTime, TargetNullValue=—}" Style="{StaticResource CellMono}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Raw string" Width="*" MinWidth="160" SortMemberPath="Raw">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Raw}" Style="{StaticResource CellMono}" ToolTip="{Binding Raw}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Integrity -->
+                        <ScrollViewer Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Integrity}" VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="28,22,28,28">
+                                <TextBlock Text="Integrity &amp; services" Style="{StaticResource H1}" />
+                                <TextBlock Text="Is the evidence complete and recent? Every source's health, clock changes, and the services that record evidence - their state now and every stop or change. Disabled services, restarted processes or a recreated journal mean something may have been wiped before the scan."
+                                           Style="{StaticResource Sub}" Margin="0,4,0,18" TextWrapping="Wrap" />
+
+                                <Border Style="{StaticResource Card}" Padding="0">
+                                    <ItemsControl ItemsSource="{Binding IntegrityChecks}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="16,10">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="20" />
+                                                            <ColumnDefinition Width="110" />
+                                                            <ColumnDefinition Width="230" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <Ellipse Width="8" Height="8" Fill="{Binding State, Converter={StaticResource Tone}}" VerticalAlignment="Top" Margin="0,5,0,0" HorizontalAlignment="Left" />
+                                                        <TextBlock Grid.Column="1" Text="{Binding Area}" Foreground="{StaticResource TextFaint}" FontSize="12.5" />
+                                                        <TextBlock Grid.Column="2" Text="{Binding Name}" FontWeight="SemiBold" FontSize="12.5" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
+                                                        <TextBlock Grid.Column="3" Text="{Binding Detail}" Style="{StaticResource Sub}" />
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Border>
+
+                                <TextBlock Text="Clock changes" Style="{StaticResource H2}" Margin="0,26,0,10" />
+                                <Border Style="{StaticResource Card}" Padding="0">
+                                    <StackPanel>
+                                        <ItemsControl ItemsSource="{Binding ClockChanges}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="16,10">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="20" />
+                                                                <ColumnDefinition Width="230" />
+                                                                <ColumnDefinition Width="340" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <Ellipse Width="8" Height="8" Fill="{Binding Severity, Converter={StaticResource Tone}}" VerticalAlignment="Top" Margin="0,5,0,0" HorizontalAlignment="Left" />
+                                                            <TextBlock Grid.Column="1" Text="{Binding Source}" FontWeight="SemiBold" FontSize="12.5" TextWrapping="Wrap" />
+                                                            <TextBlock Grid.Column="2" FontFamily="{StaticResource MonoFont}" FontSize="12">
+                                                                <Run Text="{Binding OldTimeUtc, Converter={StaticResource Time}, Mode=OneWay}" />
+                                                                <Run Text=" → " Foreground="{StaticResource TextFaint}" />
+                                                                <Run Text="{Binding NewTimeUtc, Converter={StaticResource Time}, Mode=OneWay}" />
+                                                            </TextBlock>
+                                                            <TextBlock Grid.Column="3" Text="{Binding Detail}" Style="{StaticResource Sub}" />
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Margin="16,12" Style="{StaticResource Sub}" Text="No clock changes found. Normal sleep/resume re-syncs and small time-service corrections are ignored."
+                                                   Visibility="{Binding ClockChanges, Converter={StaticResource Vis}, ConverterParameter=invert}" />
+                                    </StackPanel>
+                                </Border>
+
+                                <TextBlock Text="Evidence services now" Style="{StaticResource H2}" Margin="0,26,0,4" Visibility="{Binding Tamper.HasResults, Converter={StaticResource Vis}}" />
+                                <TextBlock Text="SysMain (Prefetch), BAM, DPS, PcaSvc, EventLog and the others that record what ran. A red one is off, stopped or was changed in a way Windows does not do itself."
+                                           Style="{StaticResource Sub}" Margin="0,0,0,10" Visibility="{Binding Tamper.HasResults, Converter={StaticResource Vis}}" />
+                                <Border Style="{StaticResource Card}" Padding="0" Visibility="{Binding Tamper.HasResults, Converter={StaticResource Vis}}">
+                                    <ItemsControl ItemsSource="{Binding Tamper.ServicesList}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="16,10">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="20" />
+                                                            <ColumnDefinition Width="150" />
+                                                            <ColumnDefinition Width="220" />
+                                                            <ColumnDefinition Width="160" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <Ellipse Width="8" Height="8" Fill="{Binding Status, Converter={StaticResource Tone}}" VerticalAlignment="Top" Margin="0,5,0,0" HorizontalAlignment="Left" />
+                                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="SemiBold" FontSize="12.5" TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Grid.Column="2" Text="{Binding Role}" Foreground="{StaticResource TextFaint}" FontSize="12.5" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
+                                                        <TextBlock Grid.Column="3" FontSize="12.5">
+                                                            <Run Text="{Binding State, Mode=OneWay}" /> <Run Text="·" Foreground="{StaticResource TextFaint}" /> <Run Text="{Binding StartType, Mode=OneWay}" Foreground="{StaticResource TextSub}" />
+                                                        </TextBlock>
+                                                        <TextBlock Grid.Column="4" Text="{Binding Note}" Style="{StaticResource Sub}" />
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Border>
+
+                                <TextBlock Text="Service history" Style="{StaticResource H2}" Margin="0,26,0,4" />
+                                <TextBlock Text="Stops, start-type changes and crashes of the services that record evidence. Red rows are the ones not explained by a shutdown, an update or Windows itself."
+                                           Style="{StaticResource Sub}" Margin="0,0,0,10" />
+                                <Border Style="{StaticResource Card}" Padding="0">
+                                    <StackPanel>
+                                        <ItemsControl ItemsSource="{Binding ServiceHistory}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="16,8">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="20" />
+                                                                <ColumnDefinition Width="170" />
+                                                                <ColumnDefinition Width="130" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <Ellipse Width="8" Height="8" Fill="{Binding Ok, Converter={StaticResource Tone}}" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                                                            <TextBlock Grid.Column="1" Text="{Binding TimeUtc, Converter={StaticResource Time}}" FontFamily="{StaticResource MonoFont}" FontSize="12" />
+                                                            <TextBlock Grid.Column="2" Text="{Binding Service}" FontWeight="SemiBold" FontSize="12.5" />
+                                                            <TextBlock Grid.Column="3" Text="{Binding Change}" Style="{StaticResource Sub}" />
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Margin="16,12" Style="{StaticResource Sub}" Text="No service stops or changes recorded for the evidence services."
+                                                   Visibility="{Binding ServiceHistory, Converter={StaticResource Vis}, ConverterParameter=invert}" />
+                                    </StackPanel>
+                                </Border>
+
+                                <TextBlock Text="Sources" Style="{StaticResource H2}" Margin="0,26,0,10" />
+                                <Border Style="{StaticResource Card}" Padding="0">
+                                    <ItemsControl ItemsSource="{Binding Sources}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="16,10">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="20" />
+                                                            <ColumnDefinition Width="260" />
+                                                            <ColumnDefinition Width="110" />
+                                                            <ColumnDefinition Width="80" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <Ellipse Width="8" Height="8" Fill="{Binding Success, Converter={StaticResource Tone}}" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="SemiBold" FontSize="12.5" />
+                                                        <TextBlock Grid.Column="2" Style="{StaticResource Sub}"><Run Text="{Binding Items, Mode=OneWay, StringFormat=N0}" /> <Run Text="items" /></TextBlock>
+                                                        <TextBlock Grid.Column="3" Style="{StaticResource Sub}" Text="{Binding Duration.TotalSeconds, StringFormat={}{0:0.0} s}" />
+                                                        <TextBlock Grid.Column="4" Text="{Binding Message}" Style="{StaticResource Sub}" />
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <!-- ===== Help (available in every state) ===== -->
+                    <ScrollViewer Visibility="{Binding Page, Converter={StaticResource PageVis}, ConverterParameter=Help}"
+                                  VerticalScrollBarVisibility="Auto" Background="{StaticResource Bg}">
+                        <StackPanel Margin="28,22,28,32" MaxWidth="1100" HorizontalAlignment="Left">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Content="← Back" VerticalAlignment="Top"
+                                        Command="{Binding NavigateCommand}" CommandParameter="Overview" />
+                                <StackPanel>
+                                    <TextBlock Text="Help" Style="{StaticResource H1}" />
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0">
+                                        <Run Text="History Parser" /> <Run Text="{Binding AppVersion, Mode=OneWay}" /> <Run Text="· everything you need to run a screenshare with it." />
+                                    </TextBlock>
+                                </StackPanel>
+                            </DockPanel>
+
+                            <!-- Quick start -->
+                            <Border Style="{StaticResource Card}" Margin="0,20,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Quick start" Style="{StaticResource H2}" />
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" FontSize="13" LineHeight="22" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                        <Run FontWeight="SemiBold" Text="1." /> Have the player keep Minecraft open, run HistoryParser.exe and click Yes on the administrator prompt — without it, Prefetch, BAM, Amcache, the USN journal, the Security log and the game checks cannot be read.<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="2." /> Pick a time range (This boot is usually right), the rules and options, then start the scan. It usually takes about a minute.<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="3." /> Read Overview, then All findings — strongest first, executions and tampering together. Click a finding's file path to open that file's full record.<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="4." /> Check Deleted and Commands, then search All programs for anything the player was asked about.<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="5." /> Look at Integrity: a disabled or wiped source means the other pages are incomplete, which is a finding in itself.<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="6." /> Go through the Tampering section: it shows whether the records were tampered with — logs cleared, services stopped, evidence files deleted, record-erasing commands or arguments run.<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="7." /> Export HTML to share with staff, or JSON to reopen the exact same report later with "Open saved report". Both hold executions and tampering.
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- The tampering half of the scan -->
+                            <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Tampering — are the records trustworthy?" Style="{StaticResource H2}" />
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                        <Run FontWeight="SemiBold" Text="Integrity &amp; services" /> — whether each evidence source is on, recent and readable; evidence services disabled, stopped, killed or reconfigured, and who did it (Windows or a user); clock changes.<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="Event logs" /> — logs turned off, shrunk, cleared, or with single events deleted (gaps in the record numbers).<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="Evidence files" /> — event logs, Prefetch, Amcache, recent items, jump lists, shell history and PCA logs deleted or emptied; programs deleted right before the scan.<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="USB devices" /> — USB drives connected in the period or plugged in now, and programs that ran from one.<LineBreak />
+                                        <Run FontWeight="SemiBold" Text="Program arguments" /> — the command lines programs were launched with, checked against your argument rules; encoded PowerShell is decoded.<LineBreak /><LineBreak />
+                                        Click a row on these pages for everything about it; Ctrl+F searches every column; CSV exports the table as shown. Program-argument rules are edited with the command rules on the start screen (Customize rules) and saved in the same rules file, under [arguments].
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Time range -->
+                            <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Choosing a time range" Style="{StaticResource H2}" />
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                        The range only decides what is shown. The scan still reads and cross-checks everything, so a file deleted today is still compared with
+                                        a run from weeks ago, and problems the PC has right now (a service disabled, a log turned off) always show.<LineBreak /><LineBreak />
+                                        <Run FontWeight="SemiBold" Text="This boot" /> starts when Windows last started; the start screen shows when that was. With Windows' Fast Startup on (the default
+                                        on most PCs), "Shut down" does not end a boot — only Restart does — so one boot can cover several days. Pick 24 hours or 3 days when you
+                                        want a fixed period.
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition />
+                                    <ColumnDefinition Width="14" />
+                                    <ColumnDefinition />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Pages -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="Pages" Style="{StaticResource H2}" />
+                                        <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                            <Run FontWeight="SemiBold" Text="All findings" /> — every lead, strongest first; click a path to open the file.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="All programs" /> — everything that was started, including scripts and jars run through Java.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Executables / DLLs / JARs" /> — every file of that type any source mentions; turn on "Ran" to hide ones only seen.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Commands" /> — PowerShell, cmd / terminal, Run box, Explorer search, Bash and logged commands; flagged ones first.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Deleted" /> — programs that ran and are now deleted, recycled, renamed or missing.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Inconsistencies" /> — where sources disagree about when something happened.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Timeline / Memory strings" /> — every raw record, and the program paths found in process memory.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Integrity &amp; services" /> — whether each evidence source is on, recent and readable, plus clock and service history.
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Statuses -->
+                                <Border Grid.Column="2" Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="File status" Style="{StaticResource H2}" />
+                                        <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                            <Run FontWeight="SemiBold" Foreground="{StaticResource Ok}" Text="Present" /> — the file is still at that path.<LineBreak />
+                                            <Run FontWeight="SemiBold" Foreground="{StaticResource High}" Text="Deleted" /> — the USN journal recorded its deletion (time shown).<LineBreak />
+                                            <Run FontWeight="SemiBold" Foreground="{StaticResource High}" Text="Recycle Bin" /> — moved to the Recycle Bin (time shown).<LineBreak />
+                                            <Run FontWeight="SemiBold" Foreground="{StaticResource High}" Text="Renamed" /> — renamed after it ran; the new name is in the details.<LineBreak />
+                                            <Run FontWeight="SemiBold" Foreground="{StaticResource Medium}" Text="Missing" /> — gone, but no deletion record survives (the journal wraps, so this alone proves nothing).<LineBreak />
+                                            <Run FontWeight="SemiBold" Foreground="{StaticResource Medium}" Text="Drive absent" /> — it ran from a drive that is not plugged in now, e.g. a USB stick.<LineBreak />
+                                            <LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Executed" /> = started as a process.  <Run FontWeight="SemiBold" Text="Loaded" /> = loaded by another program (DLLs, jars).  <Run FontWeight="SemiBold" Text="Seen" /> = only referenced in a cache, log or memory.
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <!-- Severity -->
+                            <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="What High, Medium and Low mean" Style="{StaticResource H2}" />
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,12" Text="Findings are leads, not verdicts. Always open the evidence before deciding." />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="90" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Border CornerRadius="9" Padding="8,2" Background="{StaticResource HighSoft}" HorizontalAlignment="Left" VerticalAlignment="Top">
+                                            <TextBlock Text="High" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource High}" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1" Style="{StaticResource Sub}" Foreground="{StaticResource Text}" Margin="0,0,0,12" TextWrapping="Wrap"
+                                                   Text="Does not happen on an untouched PC, or evidence was clearly destroyed: a run recorded after the file was deleted, timestamps in the future, the clock set back by hand, faked file dates, the USN journal deleted, event logs cleared, Prefetch or a key service disabled, recently used Prefetch files deleted in a batch." />
+                                        <Border Grid.Row="1" CornerRadius="9" Padding="8,2" Background="{StaticResource MediumSoft}" HorizontalAlignment="Left" VerticalAlignment="Top">
+                                            <TextBlock Text="Medium" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Medium}" />
+                                        </Border>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource Sub}" Foreground="{StaticResource Text}" Margin="0,0,0,12" TextWrapping="Wrap"
+                                                   Text="A strong lead with possible innocent explanations: a cheat or tool name, ran then deleted within an hour, contents replaced after the last run, a disguised or renamed program, anti-forensic commands, DPS / PcaSvc restarted after boot." />
+                                        <Border Grid.Row="2" CornerRadius="9" Padding="8,2" Background="{StaticResource LowSoft}" HorizontalAlignment="Left" VerticalAlignment="Top">
+                                            <TextBlock Text="Low" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Low}" />
+                                        </Border>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Sub}" Foreground="{StaticResource Text}" TextWrapping="Wrap"
+                                                   Text="Context that is often normal: Windows housekeeping (Prefetch pruning, updates), app updates, deleted long after running, Defender detections, launch times that do not line up. Each one says why it is Low." />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition />
+                                    <ColumnDefinition Width="14" />
+                                    <ColumnDefinition />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Sources -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="Where the evidence comes from" Style="{StaticResource H2}" />
+                                        <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                            <Run FontWeight="SemiBold" Text="Prefetch" /> — last 8 run times and run count of each program, and the DLLs and jars it loaded.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="BAM / PCA / UserAssist" /> — when programs ran, per user, and launches through Explorer.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Amcache / ShimCache" /> — programs Windows has inventoried, with SHA-1 and dates; survives Prefetch being cleared.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="USN journal / Recycle Bin" /> — file creations, deletions and renames; also reveals clock rollbacks.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Recent shortcuts / taskbar records" /> — files opened from Explorer and programs used from the taskbar.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Crash reports" /> — programs that crashed (proof they ran) and the modules they had loaded.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Privacy access" /> — every desktop program that used the camera, microphone, location or screen capture, with the start and stop time of its last use, even after it was deleted.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Event logs / Memory" /> — clock changes, cleared logs, services, and program paths still held in memory.
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Options -->
+                                <Border Grid.Column="2" Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="Options and own traces" Style="{StaticResource H2}" />
+                                        <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                            <Run FontWeight="SemiBold" Text="Scan memory" /> — off only if the scan must be quicker; memory catches programs nothing else recorded.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Check signatures and hashes" /> — needed for disguised or renamed programs and for VirusTotal lookups.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Hide private details" /> — reports mask PC and user names and drop personal history; files, findings and flagged commands stay.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Save the report automatically" /> — an HTML and a JSON report land in "Screenshare reports" on the Desktop.<LineBreak /><LineBreak />
+                                            <Run FontWeight="SemiBold" Text="By this program" /> — running History Parser or the other programs in this suite (Program Checker, Client Parser, Malware Checker, Cheat String Finder) leaves traces: their runs, unpacked runtime, launcher. A copy only counts as this suite when it is byte-for-byte the same file as the one in the running program's folder, so a cheat renamed to one of these names still shows. They are never counted as findings and are hidden unless you turn this switch on.
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition />
+                                    <ColumnDefinition Width="14" />
+                                    <ColumnDefinition />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Shortcuts -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="Shortcuts &amp; tips" Style="{StaticResource H2}" />
+                                        <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                            <Run FontWeight="SemiBold" Text="Click a file" /> — every record of it, its signature, hash, dates and findings on the right.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Click a column" /> — sort by it; click again to reverse. Files start sorted by Last run.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Ctrl+F" /> — search the current page.  <Run FontWeight="SemiBold" Text="Esc" /> — clear the search.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Ctrl+C" /> — copy the selected row's path or command.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Right-click" /> — copy path / name / SHA-256, open the folder, look the hash up on VirusTotal.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="CSV" /> — exports exactly what the current page shows.
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Screenshare tips -->
+                                <Border Grid.Column="2" Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="Screenshare tips" Style="{StaticResource H2}" />
+                                        <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                            • Scan before the player restarts, closes Minecraft or closes terminals — memory and open-console evidence disappears.<LineBreak />
+                                            • A very recent restart, or Explorer / DPS restarted shortly before the scan, is worth asking about.<LineBreak />
+                                            • Names are easy to change: judge by behaviour (deleted after running, swapped, clock changes), not just names.<LineBreak />
+                                            • Use Program Checker on anything suspicious (Overview has a button for the recently run programs) and Client Parser on the running game.<LineBreak />
+                                            • Use "Customize rules" to add your own record-tampering commands, and "Save file…" to share your rules with other staff.
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <!-- Privacy & limits -->
+                            <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Privacy, safety and limits" Style="{StaticResource H2}" />
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                        • Read-only: nothing on the PC is changed, deleted or installed, and no driver is loaded. The only file it writes is a report you save (or the automatic save, if switched on).<LineBreak />
+                                        • Offline: the scan never connects to the internet; a VirusTotal lookup only opens your browser when you click it.<LineBreak />
+                                        • Reports contain private details (PC and user names, command history) — use "Hide private details" for reports you share.<LineBreak />
+                                        • Open source and not obfuscated: read the code with ILSpy and compare it with the published source.<LineBreak />
+                                        • Not read: SRUM and the search index; folders opened (ShellBags) and looked-up domains — those are browsing history, not execution; CSRSS memory (Windows protects it). cmd.exe keeps no history file, so its commands only show while the window is open.<LineBreak />
+                                        • Command-line switches: --rules file.txt (load rules and scan), --autoscan (scan with defaults), --open report.json, --no-elevate.
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+*.user
+publish/
+TestResults/
+snapshots/
+*.ssreport.json
+dist/
