@@ -385,8 +385,11 @@ public sealed class CrashReportCollector : ICollector
             Detail = $"Windows Error Reporting ({kind}) — it was running then",
         });
         int items = 1;
-        foreach (var m in modules.Select(ctx.Paths.Normalize).Where(m => m.Contains(":\\") && !FileTypes.IsWindowsFile(m) &&
-                                                                         !m.Equals(app, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase))
+        // A crashed program had hundreds of Windows' own libraries loaded. Each one is verified (not assumed from its folder)
+        // before it is left out, so a library planted in the Windows folder stays in.
+        var loaded = modules.Select(ctx.Paths.Normalize).Where(m => m.Contains(":\\")).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        Analysis.RoutineFiles.Prime(loaded.Where(Analysis.RoutineFiles.InWindowsFolder));
+        foreach (var m in loaded.Where(m => !FileTypes.IsWindowsFile(m) && !m.Equals(app, StringComparison.OrdinalIgnoreCase)))
         {
             ctx.Add(new Evidence
             {
@@ -419,10 +422,11 @@ public sealed class CrashReportCollector : ICollector
                     try { text = File.ReadAllText(log); }
                     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
                     var t = File.GetLastWriteTimeUtc(log);
-                    foreach (Match m in HsErrLibrary.Matches(text))
+                    var libraries = HsErrLibrary.Matches(text).Select(m => ctx.Paths.Normalize(m.Groups["path"].Value.Trim())).ToList();
+                    Analysis.RoutineFiles.Prime(libraries.Where(Analysis.RoutineFiles.InWindowsFolder), ct);
+                    foreach (var p in libraries)
                     {
-                        var p = ctx.Paths.Normalize(m.Groups["path"].Value.Trim());
-                        if (FileTypes.IsWindowsFile(p)) continue;
+                        if (FileTypes.IsWindowsFile(p)) continue; // verified as Windows' own, not assumed from its folder
                         ctx.Add(new Evidence
                         {
                             Source = EvidenceSource.CrashReport, Kind = EvidenceKind.LoadedModule, Path = p, TimeUtc = t, Origin = Path.GetFileName(log),
@@ -481,11 +485,17 @@ public sealed class DefenderDetectionCollector : ICollector
         return items;
     }
 
-    /// <summary>"file:_C:\x\y.exe; process:_pid:12,ProcessStart:1" → C:\x\y.exe; also "containerfile:_" entries.</summary>
+    /// <summary>
+    /// "file:_C:\x\y.exe; process:_pid:12,ProcessStart:1" → C:\x\y.exe; also "containerfile:_" entries (an archive, with
+    /// "->inner name" after it) and "webfile:_C:\x\y.exe|https://…|pid:…" (a download). A "CmdLine:_" resource is a command,
+    /// not a file, and may itself hold semicolons, so it yields nothing here.
+    /// </summary>
     internal static IEnumerable<string> DetectionPaths(string raw) =>
+        raw.StartsWith("CmdLine:_", StringComparison.OrdinalIgnoreCase) ? [] :
         raw.Split(';').Select(s => s.Trim())
-            .Where(s => s.StartsWith("file:_", StringComparison.OrdinalIgnoreCase) || s.StartsWith("containerfile:_", StringComparison.OrdinalIgnoreCase))
-            .Select(s => s[(s.IndexOf('_') + 1)..].Split("->")[0].Trim())
+            .Where(s => s.StartsWith("file:_", StringComparison.OrdinalIgnoreCase) || s.StartsWith("containerfile:_", StringComparison.OrdinalIgnoreCase) ||
+                        s.StartsWith("webfile:_", StringComparison.OrdinalIgnoreCase))
+            .Select(s => s[(s.IndexOf('_') + 1)..].Split("->")[0].Split('|')[0].Trim())
             .Where(s => s.Length > 3 && s[1] == ':')
             .Distinct(StringComparer.OrdinalIgnoreCase);
 }

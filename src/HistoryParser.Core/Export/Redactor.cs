@@ -94,7 +94,12 @@ public static class Redactor
 
         return new ScanResult
         {
-            Machine = r.Machine with { ComputerName = PcMask, UserName = UserMask },
+            Machine = r.Machine with
+            {
+                ComputerName = PcMask, UserName = UserMask,
+                // The account a game was started with is a name too; its folders carry the user's.
+                Games = r.Machine.Games.Select(g => g with { Path = clean(g.Path), GameDir = clean(g.GameDir), Runs = clean(g.Runs), Account = g.Account.Length > 0 ? UserMask : "" }).ToList(),
+            },
             StartedUtc = r.StartedUtc,
             FinishedUtc = r.FinishedUtc,
             Files = files,

@@ -374,7 +374,7 @@ public static class BlockingAudit
 
     // ---- evidence switched off ------------------------------------------------------------------------
 
-    static int LoggingSwitches(BypassContext ctx)
+    internal static int LoggingSwitches(BypassContext ctx)
     {
         int items = 0;
         using (var eventLog = Open(Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Services\EventLog\Parameters"))
@@ -432,7 +432,7 @@ public static class BlockingAudit
     // ---- Prefetch files frozen ------------------------------------------------------------------------
 
     /// <summary>SysMain cannot update a read-only .pf, so its run count and last-run time stop moving. Windows never sets these attributes.</summary>
-    static int PrefetchAttributes(BypassContext ctx)
+    internal static int PrefetchAttributes(BypassContext ctx)
     {
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Prefetch");
         var info = new DirectoryInfo(dir);

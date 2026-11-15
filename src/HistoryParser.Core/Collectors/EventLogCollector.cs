@@ -279,15 +279,20 @@ public sealed class EventLogCollector : ICollector
             Path = path.Length > 0 ? path : $"[Service] {name}", TimeUtc = t, Origin = "System/7045",
             Detail = $"{(isDriver ? "Driver" : "Service")} \"{name}\" installed ({type}, start: {data.GetValueOrDefault("StartType")})",
         });
-        if (isDriver && !FileTypes.IsWindowsFile(path))
+        // A driver that is on disk and signed by Microsoft itself (Windows' own) is left out. One that merely sits in the
+        // Windows folder is not: System32\drivers is where every driver goes, mapped or not, and a deleted one cannot be checked.
+        var facts = path.Length > 3 && File.Exists(path) ? Analysis.SignatureTrust.Of(path) : null;
+        if (isDriver && facts?.IsMicrosoft != true)
         {
-            // Installed software (anti-cheats, RGB, hardware tools) keeps drivers in Program Files;
-            // a driver loaded from Downloads/Temp/Desktop is how driver mappers get kernel access.
-            bool installed = path.Contains(@"\Program Files", StringComparison.OrdinalIgnoreCase) ||
-                             path.Contains(@"\ProgramData\", StringComparison.OrdinalIgnoreCase);
-            ctx.Flag(installed ? Severity.Low : Severity.Medium, FindingCategory.Driver, $"Kernel driver installed: {name}",
+            // Judged on the file, not its folder: installed software (anti-cheats, RGB, hardware tools) ships drivers whose
+            // signature ends in a root Windows itself trusts. A driver that is gone, unsigned, or signed only through a
+            // certificate added to this PC is how driver mappers get kernel access.
+            bool vouched = facts is { Status: SignatureStatus.Signed, Root: Analysis.SignerRoot.Program };
+            ctx.Flag(vouched ? Severity.Low : Severity.Medium, FindingCategory.Driver, $"Kernel driver installed: {name}",
                 $"Driver \"{name}\" from {image} was installed at {Util.When.L(t)}." +
-                (installed ? "" : " It is not in Program Files — kernel cheats and driver mappers load drivers this way."),
+                (vouched ? $" The file is signed by {facts!.Signer}."
+                    : facts == null ? " The file is not there now, so it cannot be checked — driver mappers load a driver and delete it."
+                    : " The file is not validly signed by a publisher Windows itself trusts."),
                 path, t);
         }
         return 1;

@@ -56,9 +56,17 @@ public sealed class SystemStateCollector : ICollector
                 ctx.Flag(Severity.High, FindingCategory.Integrity, "Prefetch disabled",
                     "EnablePrefetcher is 0, so Windows is not recording program runs in Prefetch.");
                 break;
-            case int v when v is 1 or 2:
+            // 1 = programs, 2 = boot only, 3 = both. With 2, Windows still prefetches its own startup but writes nothing for
+            // the programs a person runs - the same blind spot as 0, without the value everyone checks for.
+            case int v when v == 2:
+                ctx.Check("Prefetch", "EnablePrefetcher", CheckState.Bad, "EnablePrefetcher = 2: Prefetch records Windows' own startup only, not the programs that are run.");
+                ctx.Flag(Severity.High, FindingCategory.Integrity, "Prefetch switched off for programs",
+                    "EnablePrefetcher is 2 (boot only), so Windows is not recording program runs in Prefetch. The Windows default is 3; " +
+                    "2 looks less obvious than 0 but hides exactly the same thing.");
+                break;
+            case int v when v == 1:
                 ctx.Check("Prefetch", "EnablePrefetcher", CheckState.Warning,
-                    $"EnablePrefetcher = {v} (partial; Windows default is 3 = applications + boot).");
+                    "EnablePrefetcher = 1 (programs only; the Windows default is 3 = programs + boot). Program runs are still recorded.");
                 break;
             case int v:
                 ctx.Check("Prefetch", "EnablePrefetcher", CheckState.Ok, $"EnablePrefetcher = {v}.");
@@ -122,30 +130,56 @@ public sealed class SystemStateCollector : ICollector
         ctx.Check("Services", w.Service, state, detail);
     }
 
+    /// <summary>
+    /// The desktop shell keeps the paths of programs opened from it in memory, and restarting it wipes them. It starts when
+    /// the user signs in, so it is judged against the sign-in: a start well after that is a restart. Only the shell is
+    /// judged (the process that owns the desktop), never the extra Explorer processes Windows starts for folder windows.
+    /// </summary>
     static void CheckExplorer(ScanContext ctx)
     {
-        var explorers = Process.GetProcessesByName("explorer");
-        try
+        if (SessionTimes.ShellStart() is not { } shell)
         {
-            if (explorers.Length == 0)
-            {
-                ctx.Check("Processes", "explorer.exe", CheckState.Warning, "Explorer is not running.");
-                return;
-            }
-            foreach (var p in explorers)
-            {
-                var started = WinApi.GetProcessStartUtc(p.Id);
-                if (started is not { } s) continue;
-                bool late = s - ctx.BootUtc > TimeSpan.FromMinutes(10);
-                ctx.Check("Processes", $"explorer.exe (pid {p.Id})", late ? CheckState.Warning : CheckState.Ok,
-                    $"Started {Util.When.L(s)}." + (late
-                        ? " Well after boot: Explorer was restarted (wiping its memory strings), or the user signed in later than Windows started — common with Fast Startup, where one boot spans several shutdowns."
-                        : ""));
-            }
+            ctx.Check("Processes", "explorer.exe", CheckState.Warning, "The desktop shell (Explorer) is not running.");
+            // Closing Explorer wipes what it kept in memory just as a restart does. Only said for a signed-in desktop:
+            // a session without one (a service, a build agent) has no shell to begin with.
+            if (ctx.SignInUtc != null && Environment.UserInteractive)
+                ctx.Flag(ctx.Games.Count > 0 ? Severity.Medium : Severity.Low, FindingCategory.Integrity, ShellClosed,
+                    "No program owns the desktop: Explorer was closed and not started again. It keeps the paths of the programs opened from it " +
+                    "in memory, and closing it wipes them." + (ctx.Games.Count > 0 ? " The game is running." : ""));
+            return;
         }
-        finally
+        ctx.ShellStartUtc = shell.StartUtc;
+        var (state, detail, finding) = JudgeShell(shell.StartUtc, ctx.BootUtc, ctx.SignInUtc, ctx.Games.Count > 0 ? ctx.Games[0].StartUtc : null);
+        ctx.Check("Processes", $"explorer.exe (pid {shell.Pid})", state, detail);
+        if (finding is { } f) ctx.Flag(f.Severity, FindingCategory.Integrity, f.Title, f.Detail, timeUtc: shell.StartUtc);
+    }
+
+    /// <summary>How long after the sign-in (or the boot) the shell may start and still count as started with it.</summary>
+    internal static readonly TimeSpan ShellGrace = TimeSpan.FromMinutes(10);
+
+    public const string ShellRestarted = "Explorer was restarted after sign-in";
+    public const string ShellClosed = "Explorer is not running";
+
+    internal static (CheckState State, string Detail, (Severity Severity, string Title, string Detail)? Finding) JudgeShell(
+        DateTime started, DateTime bootUtc, DateTime? signInUtc, DateTime? gameUtc)
+    {
+        if (signInUtc is not { } signIn)
         {
-            foreach (var p in explorers) p.Dispose();
+            // Without the sign-in only the boot is left to compare with, and one boot can span several sign-ins.
+            bool late = started - bootUtc > ShellGrace;
+            return (late ? CheckState.Warning : CheckState.Ok, $"Started {Util.When.L(started)}." + (late
+                ? " Well after boot: Explorer was restarted (wiping its memory strings), or the user signed in later than Windows started — the sign-in time could not be read to tell which."
+                : ""), null);
         }
+        var after = started - signIn;
+        if (after <= ShellGrace) return (CheckState.Ok, $"Started {Util.When.L(started)}, with the sign-in at {Util.When.L(signIn)}.", null);
+
+        string gap = Analysis.Correlator.FormatGap(after);
+        bool duringGame = gameUtc is { } game && started > game;
+        return (CheckState.Warning, $"Restarted {Util.When.L(started)}, {gap} after the sign-in at {Util.When.L(signIn)}.",
+            (duringGame ? Severity.Medium : Severity.Low, ShellRestarted,
+                $"The desktop shell (explorer.exe) started at {Util.When.L(started)}, {gap} after the sign-in at {Util.When.L(signIn)}, so it was restarted. " +
+                "Explorer keeps the paths of the programs opened from it in memory, and a restart wipes them." +
+                (duringGame ? $" The game was already running (started {Util.When.L(gameUtc)})." : " It also restarts after a crash or an update.")));
     }
 }

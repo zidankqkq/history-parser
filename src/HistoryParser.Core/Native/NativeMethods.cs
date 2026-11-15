@@ -326,4 +326,74 @@ internal static class NativeMethods
 
     [DllImport("wintrust.dll")]
     public static extern bool CryptCATAdminReleaseContext(IntPtr catAdmin, uint flags);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct CATALOG_INFO
+    {
+        public uint cbStruct;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string wszCatalogFile;
+    }
+
+    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool CryptCATCatalogInfoFromContext(IntPtr catInfo, ref CATALOG_INFO info, uint flags);
+
+    /// <summary>Checks one file against one catalog: is its hash listed there, and is the catalog validly signed.</summary>
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct WINTRUST_CATALOG_INFO
+    {
+        public uint cbStruct;
+        public uint dwCatalogVersion;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pcwszCatalogFilePath;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pcwszMemberTag;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pcwszMemberFilePath;
+        public IntPtr hMemberFile;
+        public IntPtr pbCalculatedFileHash;
+        public uint cbCalculatedFileHash;
+        public IntPtr pcCatalogContext;
+        public IntPtr hCatAdmin;
+    }
+
+    public const uint WTD_CHOICE_CATALOG = 2;
+
+    // ---- who vouches for a signature: Microsoft's own root, and Windows' list of trusted roots (read-only) ----
+    public const int CERT_CHAIN_POLICY_MICROSOFT_ROOT = 7;
+    public const uint MICROSOFT_ROOT_CERT_CHAIN_POLICY_CHECK_APPLICATION_ROOT_FLAG = 0x00020000;
+    public const uint X509_ASN_ENCODING = 0x1, PKCS_7_ASN_ENCODING = 0x10000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CERT_CHAIN_POLICY_PARA { public uint cbSize; public uint dwFlags; public IntPtr pvExtraPolicyPara; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CERT_CHAIN_POLICY_STATUS
+    {
+        public uint cbSize; public uint dwError; public int lChainIndex; public int lElementIndex; public IntPtr pvExtraPolicyStatus;
+    }
+
+    [DllImport("crypt32.dll", SetLastError = true)]
+    public static extern bool CertVerifyCertificateChainPolicy(IntPtr policyOid, IntPtr chainContext,
+        ref CERT_CHAIN_POLICY_PARA policyPara, ref CERT_CHAIN_POLICY_STATUS policyStatus);
+
+    [DllImport("crypt32.dll", SetLastError = true)]
+    public static extern IntPtr CertCreateCTLContext(uint encodingType, byte[] encoded, int length);
+
+    [DllImport("crypt32.dll")]
+    public static extern bool CertFreeCTLContext(IntPtr ctlContext);
+
+    [DllImport("crypt32.dll", SetLastError = true)]
+    public static extern bool CryptMsgGetAndVerifySigner(IntPtr cryptMsg, int signerStoreCount, IntPtr signerStores, uint flags,
+        out IntPtr signer, IntPtr signerIndex);
+
+    [DllImport("crypt32.dll")]
+    public static extern bool CertFreeCertificateContext(IntPtr certContext);
+
+    // ---- a running program's image against its file (query only) --------------------------------
+    public const int ProcessImageFileName = 27;
+    public const uint MEM_MAPPED = 0x40000;
+    public const uint FILE_READ_DATA = 0x1;
+
+    [DllImport("kernel32.dll")]
+    public static extern bool IsDebuggerPresent();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool CheckRemoteDebuggerPresent(IntPtr process, out bool debuggerPresent);
 }

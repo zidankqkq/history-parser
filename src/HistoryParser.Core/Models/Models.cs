@@ -24,6 +24,8 @@ public enum EvidenceSource
     Defender,
     CapabilityAccess,
     JumpList,
+    /// <summary>A driver or kernel module that is loaded right now (the kernel's own list).</summary>
+    LoadedDriver,
 }
 
 /// <summary>What the evidence says happened to the file.</summary>
@@ -159,9 +161,52 @@ public sealed record MachineInfo
     public string OsVersion { get; init; } = "";
     public DateTime BootTimeUtc { get; init; }
     public DateTime? OsInstallUtc { get; init; }
+    /// <summary>When the user of the session the scan ran in signed in; null when Windows did not say.</summary>
+    public DateTime? SignInUtc { get; init; }
+    /// <summary>When the desktop shell (Explorer) started.</summary>
+    public DateTime? ShellStartUtc { get; init; }
+    /// <summary>When the game that was running at the scan started (the earliest, when several ran); null when none ran.</summary>
+    public DateTime? GameStartUtc { get; init; }
+    /// <summary>That game's program and process id, for the reader.</summary>
+    public string GameProgram { get; init; } = "";
+    /// <summary>Every game found: the ones running at the scan, and earlier starts Prefetch still records. Newest start first.</summary>
+    public List<GameStart> Games { get; init; } = new();
     public string TimeZone { get; init; } = "";
     public bool IsElevated { get; init; }
     public string ToolVersion { get; init; } = "";
+    /// <summary>
+    /// SHA-256 of the program file that made this scan, lower case; empty for a developer build, whose code is not in that file,
+    /// and for reports made before this was recorded. A report is a text file: this is what it says, not proof of what ran.
+    /// </summary>
+    public string ToolSha256 { get; init; } = "";
+}
+
+/// <summary>
+/// One start of the game: a game running at the scan (it has a process id), or an earlier start that Prefetch still
+/// records. The details are what the game was started with, so the reader can tell which game this is.
+/// </summary>
+public sealed record GameStart
+{
+    public required DateTime StartUtc { get; init; }
+    /// <summary>The program's file name.</summary>
+    public string Program { get; init; } = "";
+    public string Path { get; init; } = "";
+    /// <summary>The process id while it runs; null for an earlier start.</summary>
+    public int? Pid { get; init; }
+    /// <summary>The game folder, version and account it was started with (its --gameDir, --version and --username), when given.</summary>
+    public string GameDir { get; init; } = "";
+    public string Version { get; init; } = "";
+    public string Account { get; init; } = "";
+    /// <summary>What shows it is the game: "Running", or "Prefetch" for an earlier start.</summary>
+    public string How { get; init; } = "";
+    /// <summary>
+    /// A Java program running at the scan that is not recognisably the game: it was not started with the game's arguments
+    /// and the game's graphics library is not loaded. Listed so the reader can decide what it is; never taken for the
+    /// game's start unless the reader picks it.
+    /// </summary>
+    public bool Unrecognised { get; init; }
+    /// <summary>The file a Java program that is not recognisably the game was started to run (its -jar), when given.</summary>
+    public string Runs { get; init; } = "";
 }
 
 public sealed class FileRecord
@@ -169,7 +214,13 @@ public sealed class FileRecord
     public required string Path { get; set; }
     public required string Name { get; set; }
     public FileType Type { get; set; }
+    /// <summary>One of Windows' own files: routine (see <see cref="Routine"/>) and in the Windows folder.</summary>
     public bool IsWindowsFile { get; set; }
+    /// <summary>
+    /// Why this file is kept out of the way by default, or null when it stays in view. Set only on what can be verified now
+    /// (on disk, signature and its chain, built name) - never on a place or a name. See Analysis.RoutineFiles.
+    /// </summary>
+    public string? Routine { get; set; }
     [System.Text.Json.Serialization.JsonObjectCreationHandling(System.Text.Json.Serialization.JsonObjectCreationHandling.Populate)]
     public List<Evidence> Evidence { get; } = new();
     [System.Text.Json.Serialization.JsonObjectCreationHandling(System.Text.Json.Serialization.JsonObjectCreationHandling.Populate)]
@@ -281,13 +332,29 @@ public sealed class ScanOptions
 public sealed record ScanProgress(string Message, int Completed, int Total);
 
 /// <summary>How far back a scan's results go.</summary>
-public enum TimeWindow { ThisBoot, Day, ThreeDays, Week, Month, All }
+public enum TimeWindow
+{
+    ThisBoot, Day, ThreeDays, Week, Month, All,
+    /// <summary>Since the user signed in. One boot can span several sign-ins (Fast Startup keeps the boot across shutdowns).</summary>
+    SignIn,
+    /// <summary>Since the game that is running started.</summary>
+    Game,
+}
 
 public static class TimeWindows
 {
-    /// <summary>Start of the window, or null for everything.</summary>
-    public static DateTime? Since(TimeWindow w, DateTime nowUtc, DateTime bootUtc) => w switch
+    /// <summary>Start of the window for a scan of this PC, or null for everything.</summary>
+    public static DateTime? Since(TimeWindow w, DateTime nowUtc, MachineInfo machine) =>
+        Since(w, nowUtc, machine.BootTimeUtc, machine.SignInUtc, machine.GameStartUtc);
+
+    /// <summary>
+    /// Start of the window, or null for everything. A period whose start is not known falls back to the next wider one
+    /// (game, then sign-in, then boot): never to a narrower one, so nothing is cut that the period asked for.
+    /// </summary>
+    public static DateTime? Since(TimeWindow w, DateTime nowUtc, DateTime bootUtc, DateTime? signInUtc = null, DateTime? gameUtc = null) => w switch
     {
+        TimeWindow.Game => gameUtc ?? signInUtc ?? bootUtc,
+        TimeWindow.SignIn => signInUtc ?? bootUtc,
         TimeWindow.ThisBoot => bootUtc,
         TimeWindow.Day => nowUtc.AddDays(-1),
         TimeWindow.ThreeDays => nowUtc.AddDays(-3),
@@ -296,8 +363,18 @@ public static class TimeWindows
         _ => null,
     };
 
+    /// <summary>The period that is really shown: one whose start is not known becomes the next wider one that is, so the name on screen is true.</summary>
+    public static TimeWindow Effective(TimeWindow w, MachineInfo machine) => w switch
+    {
+        TimeWindow.Game when machine.GameStartUtc == null => Effective(TimeWindow.SignIn, machine),
+        TimeWindow.SignIn when machine.SignInUtc == null => TimeWindow.ThisBoot,
+        _ => w,
+    };
+
     public static string Label(TimeWindow w) => w switch
     {
+        TimeWindow.Game => "since the game started",
+        TimeWindow.SignIn => "since sign-in",
         TimeWindow.ThisBoot => "since the last boot",
         TimeWindow.Day => "last 24 hours",
         TimeWindow.ThreeDays => "last 3 days",
@@ -310,7 +387,8 @@ public static class TimeWindows
     public static TimeWindow? Parse(string s) => s.ToLowerInvariant() switch
     {
         "boot" => TimeWindow.ThisBoot, "24h" or "1d" => TimeWindow.Day, "3d" => TimeWindow.ThreeDays,
-        "7d" or "1w" => TimeWindow.Week, "30d" => TimeWindow.Month, "all" => TimeWindow.All, _ => null,
+        "7d" or "1w" => TimeWindow.Week, "30d" => TimeWindow.Month, "all" => TimeWindow.All,
+        "signin" => TimeWindow.SignIn, "game" => TimeWindow.Game, _ => null,
     };
 
     /// <summary>

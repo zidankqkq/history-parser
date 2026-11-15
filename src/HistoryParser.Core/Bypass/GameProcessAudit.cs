@@ -79,23 +79,34 @@ public static class GameProcessAudit
         return items;
     }
 
+    /// <summary>In the folder the running game loaded lwjgl.dll from, which each game version fills with the native libraries it needs.</summary>
+    public static bool BesideLwjgl(IEnumerable<string> loaded, string path)
+    {
+        string? folder = Path.GetDirectoryName(path);
+        return folder != null && !Path.GetFileName(path).Equals("lwjgl.dll", StringComparison.OrdinalIgnoreCase) && loaded.Any(l =>
+            Path.GetFileName(l).Equals("lwjgl.dll", StringComparison.OrdinalIgnoreCase) && folder.Equals(Path.GetDirectoryName(l), StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>Native code outside Windows and the Java runtime: unsigned libraries, JVMTI agents, system DLL names from the wrong folder.</summary>
     static int NativeLibraries(BypassContext ctx, string label, List<Module> modules, string jre)
     {
         string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
         int outside = 0, flagged = 0;
+        var loaded = modules.Select(l => l.Path).ToList();
         foreach (var m in modules)
         {
             var name = Path.GetFileName(m.Path);
             bool inWindows = m.Path.StartsWith(windows, StringComparison.OrdinalIgnoreCase);
             bool inJre = jre.Length > 3 && m.Path.StartsWith(jre + "\\", StringComparison.OrdinalIgnoreCase);
-            if (inWindows) continue;
+            // Only Windows' own libraries are passed over, and each is verified: parts of the Windows folder can be written
+            // to without administrator rights, so a library that merely sits there is judged like any other.
+            if (inWindows && SignatureTrust.Of(m.Path).IsMicrosoft) continue;
 
             // A system DLL name loaded from anywhere but Windows is a hijack unless Microsoft signed that copy.
             if (HookAudit.HijackNames.Contains(name))
             {
                 var hs = FileInspector.Verify(m.Path);
-                if (!(hs == SignatureStatus.Signed && (FileInspector.SignerName(m.Path) ?? "").Contains("Microsoft", StringComparison.OrdinalIgnoreCase)))
+                if (!SignatureTrust.Of(m.Path).IsMicrosoft)
                 {
                     ctx.Route(Area, $"{label}: system DLL from the wrong folder: {name}", Display.Signature(hs), CheckState.Bad, "", m.Path);
                     ctx.Flag(Severity.High, FindingCategory.Injection, $"Hijacked system DLL loaded in {label}: {name}",
@@ -122,9 +133,11 @@ public static class GameProcessAudit
                 continue;
             }
             bool known = KnownNatives.Any(k => name.StartsWith(k, StringComparison.OrdinalIgnoreCase));
-            if (sig == SignatureStatus.Signed || known)
+            bool beside = BesideLwjgl(loaded, m.Path);
+            if (sig == SignatureStatus.Signed || known || beside)
             {
-                ctx.Route(Area, $"{label}: {name}", known && sig != SignatureStatus.Signed ? "Known game/mod library" : signer, CheckState.Ok, "", m.Path);
+                string reads = sig == SignatureStatus.Signed ? signer : known ? "Known game/mod library" : "Not signed, beside the game's LWJGL libraries";
+                ctx.Route(Area, $"{label}: {name}", reads, CheckState.Ok, beside && !known && sig != SignatureStatus.Signed ? "Each game version unpacks its own native libraries into one folder. A file put there by hand would read the same." : "", m.Path);
                 continue;
             }
             ctx.Route(Area, $"{label}: unsigned {name}", signer, CheckState.Bad, "Not part of Windows, the Java runtime or a known game library.", m.Path);

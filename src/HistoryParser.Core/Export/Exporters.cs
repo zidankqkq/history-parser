@@ -61,7 +61,8 @@ th{cursor:pointer;color:var(--sub);font-weight:600;position:sticky;top:0;backgro
 """);
         sb.Append($"<h1>History Parser report — {E(r.Machine.ComputerName)}</h1>");
         sb.Append($"<div class=sub>{E(r.Machine.OsVersion)} · user {E(r.Machine.UserName)} · scanned {T(r.StartedUtc)} ({E(r.Machine.TimeZone)}) · " +
-                  $"boot {T(r.Machine.BootTimeUtc)} · elevated: {(r.Machine.IsElevated ? "yes" : "NO")} · HistoryParser {E(r.Machine.ToolVersion)}</div>");
+                  $"boot {T(r.Machine.BootTimeUtc)} · elevated: {(r.Machine.IsElevated ? "yes" : "NO")} · HistoryParser {E(r.Machine.ToolVersion)}" +
+                  $"{(r.Machine.ToolSha256.Length > 0 ? $" · SHA-256 {E(r.Machine.ToolSha256)}" : "")}</div>");
         sb.Append("<p class=sub>Findings are leads to investigate, not verdicts. All times are shown in the scanned machine's local time.</p>");
 
         sb.Append("<div class=grid>");

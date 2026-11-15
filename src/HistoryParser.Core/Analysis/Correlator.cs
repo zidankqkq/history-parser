@@ -21,10 +21,15 @@ public sealed class Correlator
     readonly Func<string, bool> _fileExists;
     readonly Func<string, bool> _driveExists;
     readonly Func<string, DateTime?> _lastWrite;
+    readonly Func<string, string?> _routine;
 
+    /// <param name="routine">
+    /// Why a file is routine, or null (see <see cref="RoutineFiles"/>). By default only what the scan has already verified
+    /// counts, so a file nobody checked - or one that is gone - stays in view.
+    /// </param>
     public Correlator(DateTime nowUtc, TimeSpan tolerance, IReadOnlyList<ClockChange> clockChanges,
         IEnumerable<string> runningProcessNames, Func<string, bool>? fileExists = null,
-        Func<string, bool>? driveExists = null, Func<string, DateTime?>? lastWriteUtc = null)
+        Func<string, bool>? driveExists = null, Func<string, DateTime?>? lastWriteUtc = null, Func<string, string?>? routine = null)
     {
         _now = nowUtc;
         _tol = tolerance;
@@ -33,6 +38,7 @@ public sealed class Correlator
         _fileExists = fileExists ?? (p => File.Exists(p) || Directory.Exists(p));
         _driveExists = driveExists ?? (p => Directory.Exists(Path.GetPathRoot(p)));
         _lastWrite = lastWriteUtc ?? (p => File.Exists(p) ? File.GetLastWriteTimeUtc(p) : null);
+        _routine = routine ?? RoutineFiles.Known;
     }
 
     public List<FileRecord> Build(IEnumerable<Evidence> evidence)
@@ -74,15 +80,19 @@ public sealed class Correlator
         return records;
     }
 
-    static FileRecord CreateRecord(List<Evidence> items)
+    FileRecord CreateRecord(List<Evidence> items)
     {
-        // Prefer a mixed-case spelling for display (Prefetch paths are all upper case).
-        var display = items.Select(e => e.Path).FirstOrDefault(p => p.Any(char.IsLower)) ?? items[0].Path;
+        // Prefer the spelling the file really has for display: Prefetch paths are all upper case and Amcache's all lower,
+        // so one with both wins, then one with any lower case.
+        var display = items.Select(e => e.Path).FirstOrDefault(p => p.Length > 3 && p.Skip(2).Any(char.IsLower) && p.Skip(2).Any(char.IsUpper))
+                      ?? items.Select(e => e.Path).FirstOrDefault(p => p.Any(char.IsLower)) ?? items[0].Path;
         var r = new FileRecord { Path = display, Name = Path.GetFileName(display) };
         r.Evidence.AddRange(items.OrderByDescending(e => e.TimeUtc ?? DateTime.MinValue));
         // A file whose content shows it is something else (a jar named .png) is listed as what it really is.
         r.Type = items.Select(e => e.ActualType).FirstOrDefault(t => t != null) ?? FileTypes.FromPath(display);
-        r.IsWindowsFile = FileTypes.IsWindowsFile(display);
+        // Verified, never assumed from the folder: a program copied into C:\Windows, or one that is gone, is not Windows' own.
+        r.Routine = _routine(display);
+        r.IsWindowsFile = r.Routine != null && RoutineFiles.InWindowsFolder(display);
 
         var runs = items.Where(e => e.Kind is EvidenceKind.Execution or EvidenceKind.LoadedModule && e.TimeUtc.HasValue).ToList();
         r.LastExecutionUtc = runs.Count > 0 ? runs.Max(e => e.TimeUtc) : null;

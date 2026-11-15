@@ -548,7 +548,7 @@ public static class HookAudit
                 var name = Path.GetFileName(file);
                 if (!HijackNames.Contains(name)) continue;
                 var sig = FileInspector.Verify(file);
-                bool microsoft = sig == SignatureStatus.Signed && (FileInspector.SignerName(file) ?? "").Contains("Microsoft", StringComparison.OrdinalIgnoreCase);
+                bool microsoft = SignatureTrust.Of(file).IsMicrosoft; // by where the certificate chain ends, not by the name on it
                 if (microsoft) continue;
                 var written = File.GetLastWriteTimeUtc(file);
                 ctx.Route("Java", $"Planted DLL next to Java: {name}", Display.Signature(sig), CheckState.Bad,

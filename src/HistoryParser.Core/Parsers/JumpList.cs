@@ -22,11 +22,14 @@ public static class JumpList
         var list = new List<JumpListEntry>();
         if (streams.TryGetValue("DestList", out var dest))
             foreach (var (id, path, time, count, pinned) in DestList(dest))
-                list.Add(new JumpListEntry(links.TryGetValue(id, out var l) ? l.TargetPath : path, time, count, pinned, links.GetValueOrDefault(id)));
+                list.Add(new JumpListEntry(links.TryGetValue(id, out var l) && (path.Length == 0 || Names(l.TargetPath)) ? l.TargetPath : path, time, count, pinned, links.GetValueOrDefault(id)));
         else
             list.AddRange(links.Values.Select(l => new JumpListEntry(l.TargetPath, null, null, false, l)));
         return list;
     }
+
+    /// <summary>A link's target that says where it is by itself, not by a known folder or a relative path that DestList may spell out better.</summary>
+    static bool Names(string target) => target.StartsWith(@"\\", StringComparison.Ordinal) || target is [_, ':', '\\', ..];
 
     /// <summary>
     /// The DestList stream: a 32-byte header (version, entry count), then one entry per item. Windows 10/11 (version 3+)

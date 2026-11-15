@@ -47,6 +47,7 @@ th{cursor:pointer;color:var(--sub);background:#1c212a}.High,.Bad,.True{color:var
             sb.Append($"<tr><td class={f.Severity}>{f.Severity}</td><td>{E(Display.Category(f.Category))}</td><td>{E(f.Title)}</td><td>{T(f.TimeUtc)}</td><td>{E(f.Detail)}</td></tr>");
         sb.Append("</table></div>");
 
+        Table(sb, "Session", r.Session);
         Table(sb, "Event logs", r.Logs);
         Table(sb, "Deleted event records", r.RecordGaps);
         Table(sb, "Services", r.Services);
@@ -55,7 +56,9 @@ th{cursor:pointer;color:var(--sub);background:#1c212a}.High,.Bad,.True{color:var
         Table(sb, "USB connections", r.UsbEvents);
         Table(sb, "Flagged program arguments", r.Arguments.Where(a => a.Flagged));
         Table(sb, "Evidence files", r.Artifacts);
-        Table(sb, "Microsoft Defender changes", r.Defender.Where(d => d.Suspicious));
+        Table(sb, "Antivirus now", r.Antivirus);
+        Table(sb, "Antivirus detections", r.Detections);
+        Table(sb, "Changes to antivirus protection", r.Defender.Where(d => d.Suspicious));
         Table(sb, "Flagged drivers", r.Drivers.Where(d => d.Flagged));
         Table(sb, "Boot, hardware and injection routes", r.Routes.Where(x => x.State != CheckState.Ok || x.Area is "Boot" or "Hardware"));
         Table(sb, "Scheduled tasks (flagged or new)", r.Tasks.Where(t => t.Flagged || t.Note.Length > 0));
@@ -77,6 +80,8 @@ for(const t of document.querySelectorAll('table.sortable')){t.rows[0].querySelec
         var list = rows.ToList();
         if (list.Count == 0) return;
         var props = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            // Properties left out of the saved report are the same facts in another shape, for a table cell.
+            .Where(p => p.GetCustomAttribute<System.Text.Json.Serialization.JsonIgnoreAttribute>() == null)
             .Where(p => p.PropertyType.IsPrimitive || p.PropertyType.IsEnum || p.PropertyType == typeof(string) ||
                         Nullable.GetUnderlyingType(p.PropertyType) is { } u && (u.IsPrimitive || u == typeof(DateTime)) ||
                         p.PropertyType == typeof(DateTime) || p.PropertyType == typeof(TimeSpan))
@@ -137,8 +142,14 @@ for(const t of document.querySelectorAll('table.sortable')){t.rows[0].querySelec
             Tasks = r.Tasks.Select(t => t with { Command = C(t.Command), Name = C(t.Name) }).ToList(),
             Software = r.Software,
             Artifacts = r.Artifacts.Select(a => a with { Path = C(a.Path), Detail = C(a.Detail) }).ToList(),
-            Defender = r.Defender.Select(d => d with { NewValue = C(d.NewValue), OldValue = C(d.OldValue) }).ToList(),
+            Defender = r.Defender.Select(d => d with { NewValue = C(d.NewValue), OldValue = C(d.OldValue), Detail = C(d.Detail) }).ToList(),
+            Detections = r.Detections.Select(d => d with
+            {
+                Path = C(d.Path), Paths = d.Paths.Select(C).ToList(), Command = C(d.Command), Process = C(d.Process), User = C(d.User), Note = C(d.Note),
+            }).ToList(),
+            Antivirus = r.Antivirus.Select(a => a with { Name = C(a.Name), Detail = C(a.Detail) }).ToList(),
             Routes = r.Routes.Select(x => x with { Item = C(x.Item), Value = C(x.Value), Detail = C(x.Detail), Path = x.Area == "Hardware" ? "" : C(x.Path) }).ToList(), // hardware paths are device serials
+            Session = r.Session.Select(m => m with { Detail = C(m.Detail) }).ToList(),
             Sources = r.Sources.Select(s => s with { Message = C(s.Message) }).ToList(),
             PrivateDetailsHidden = true,
         };

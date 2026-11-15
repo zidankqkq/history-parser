@@ -102,6 +102,7 @@ public sealed class UsnJournalCollector : ICollector
         var pfLastActive = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         var recentDeletes = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         var hardLinks = new List<(string Path, DateTime? Time)>();
+        var windowsLinks = new Dictionary<string, (DateTime? Time, long Usn)>(StringComparer.OrdinalIgnoreCase);
 
         var input = new byte[40];
         var output = new byte[1 << 20];
@@ -189,10 +190,17 @@ public sealed class UsnJournalCollector : ICollector
                 bool deleted = (reason & UsnReason.FileDelete) != 0;
                 if (deleted && time is { } dt) recentDeletes[path] = dt;
                 // A second name for the same file: run under a harmless-looking name, Prefetch and BAM record that name.
-                if ((reason & UsnReason.HardLinkChange) != 0 && !deleted && !FileTypes.IsWindowsFile(path))
+                if ((reason & UsnReason.HardLinkChange) != 0 && !deleted)
                 {
-                    Emit(EvidenceKind.HardLinked, path, "Hard link added or removed: this name is (or was) a second name for another file");
-                    if (FileTypes.FromPath(path) is FileType.Exe or FileType.Dll or FileType.Jar or FileType.Script) hardLinks.Add((path, time));
+                    bool program = FileTypes.FromPath(path) is FileType.Exe or FileType.Dll or FileType.Jar or FileType.Script;
+                    if (!Analysis.RoutineFiles.InWindowsFolder(path))
+                    {
+                        Emit(EvidenceKind.HardLinked, path, "Hard link added or removed: this name is (or was) a second name for another file");
+                        if (program) hardLinks.Add((path, time));
+                    }
+                    // Windows links its own files by the thousand while servicing, so inside its folder a link is judged after
+                    // the read, on the file itself: only one that is not Windows' own counts.
+                    else if (program) windowsLinks[path] = (time, usn);
                 }
                 if (created) Emit(EvidenceKind.Created, path, "File created");
                 // Prefetch bookkeeping: when each .pf was last written, and how many appeared, to judge deletions later.
@@ -218,6 +226,21 @@ public sealed class UsnJournalCollector : ICollector
 
             if (next <= start) break;
             start = next;
+        }
+
+        // Links inside the Windows folder: the newest ones whose file is still there, each checked against Microsoft's
+        // signature. A program linked into C:\Windows under a system-looking name fails that check and is reported.
+        var inWindows = windowsLinks.OrderByDescending(l => l.Value.Time ?? DateTime.MinValue).Take(3000).Where(l => File.Exists(l.Key)).ToList();
+        Parallel.ForEach(inWindows, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, l => Analysis.SignatureTrust.Of(l.Key));
+        foreach (var (linked, (time, usn)) in inWindows.Where(l => !Analysis.SignatureTrust.Of(l.Key).IsMicrosoft))
+        {
+            ctx.Add(new Evidence
+            {
+                Source = EvidenceSource.UsnJournal, Kind = EvidenceKind.HardLinked, Path = linked, TimeUtc = time, Origin = $"{letter} USN {usn}",
+                Detail = "Hard link added or removed in the Windows folder: this name is (or was) a second name for another file, and the file is not one of Windows' own",
+            });
+            items++;
+            hardLinks.Add((linked, time));
         }
 
         ReportJournal(ctx, letter, journalId, maxSize, order, records, futureRecords, firstFuture);
@@ -250,7 +273,7 @@ public sealed class UsnJournalCollector : ICollector
         ctx.Flag(thisBoot ? Severity.Medium : Severity.Low, FindingCategory.AntiForensics,
             files.Count == 1 ? $"Hard link made to a program: {Path.GetFileName(files[0].Path)}" : $"Hard links made to {files.Count} programs on {letter}",
             $"A hard link gives one file a second name. Run through that name, Prefetch, BAM and the other records show the second " +
-            $"name instead of the real file. Outside Windows' own folders this is rare. {list}.", timeUtc: latest);
+            $"name instead of the real file. Windows links its own files constantly; these are not Windows' own. {list}.", timeUtc: latest);
     }
 
     static Dictionary<ulong, DirEntry> EnumerateDirectories(SafeFileHandle volume, long highUsn, CancellationToken ct)

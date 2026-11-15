@@ -173,6 +173,37 @@ public class SelfTraceNameTests
 
     [Fact]
     public void A_developer_build_trusts_no_other_programs() => Assert.Empty(Analysis.SelfTraces.SuiteHashes());
+
+    [Fact]
+    public void The_programs_own_hash_is_that_of_the_file_it_was_started_from_as_a_release_writes_it()
+    {
+        using var file = new FileStream(Environment.ProcessPath!, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        string expected = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(file)).ToLowerInvariant();
+        Assert.Equal(expected, SelfTraces.OwnHash);
+    }
+
+    [Fact]
+    public void A_build_with_its_code_beside_the_launcher_is_not_one_file()
+    {
+        // The tests run from a folder that holds the libraries, like a developer build: the launcher's hash does not cover them.
+        Assert.False(SelfTraces.OneFile);
+    }
+
+    [Theory]
+    [InlineData("0f3a", true)]
+    [InlineData("", false)]
+    public void A_report_names_the_build_that_made_it_only_when_the_scan_recorded_one(string hash, bool named)
+    {
+        var result = new ScanResult
+        {
+            Machine = new MachineInfo { ComputerName = "pc", UserName = "u", OsVersion = "", TimeZone = "", ToolVersion = "1.0", ToolSha256 = hash },
+            StartedUtc = DateTime.UtcNow, FinishedUtc = DateTime.UtcNow,
+            Files = [], Findings = [], Checks = [], Sources = [], ClockChanges = [], MemoryHits = [], Timeline = [],
+        };
+        string header = Export.HtmlExporter.Render(result, false).Split("</div>")[0];
+        Assert.Equal(named, header.Contains("SHA-256 0f3a"));
+        Assert.Equal(named, header.Contains("SHA-256"));
+    }
 }
 
 public class RulesFileTests

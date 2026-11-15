@@ -134,7 +134,7 @@ public static class ArgumentAudit
         ctx.Arguments.Add(new ArgumentHit
         {
             Program = program, Pid = pid, CommandLine = commandLine.Length > 8000 ? commandLine[..8000] + "…" : commandLine,
-            Source = source, TimeUtc = time, Reasons = string.Join("; ", reasons),
+            Source = source, TimeUtc = time, Reasons = string.Join("; ", reasons), Agents = AgentsIn(commandLine),
         });
         if (reasons.Count == 0) return;
         string key = program + "|" + string.Join(";", reasons) + "|" + LogPrefix.Replace(commandLine, "");

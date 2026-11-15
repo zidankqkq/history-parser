@@ -33,6 +33,20 @@ public sealed class BypassContext
     public DateTime? OsInstallUtc { get; }
     public IReadOnlyList<DateTime> ShutdownTimes { get; }
 
+    /// <summary>When this program was opened (before the scan was started from its window). Anything later happened in front of it.</summary>
+    public DateTime OpenedUtc { get; init; } = OwnStart();
+
+    static DateTime OwnStart()
+    {
+        try { using var self = System.Diagnostics.Process.GetCurrentProcess(); return self.StartTime.ToUniversalTime(); }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { return DateTime.UtcNow; }
+    }
+
+    /// <summary>Checks of whether the PC is still recording, shown with the history scan's own on the integrity page.</summary>
+    public ConcurrentBag<IntegrityCheck> Checks { get; } = new();
+
+    public void Check(string area, string name, CheckState state, string detail) => Checks.Add(new IntegrityCheck(area, name, state, detail));
+
     public ConcurrentBag<Finding> Findings { get; } = new();
     public ConcurrentBag<LogChannelInfo> Logs { get; } = new();
     public ConcurrentBag<RecordGap> RecordGaps { get; } = new();
@@ -46,16 +60,32 @@ public sealed class BypassContext
     public ConcurrentBag<SoftwareRow> Software { get; } = new();
     public ConcurrentBag<ArtifactChange> Artifacts { get; } = new();
     public ConcurrentBag<DefenderChange> Defender { get; } = new();
+    public ConcurrentBag<DefenderDetection> Detections { get; } = new();
+    /// <summary>The antivirus as it is now, one row per fact, in the order they were added.</summary>
+    public ConcurrentQueue<IntegrityCheck> Antivirus { get; } = new();
     public ConcurrentBag<RouteCheck> Routes { get; } = new();
 
-    public void Route(string area, string item, string value, CheckState state, string detail = "", string path = "", DateTime? timeUtc = null) =>
-        Routes.Add(new RouteCheck { Area = area, Item = item, Value = value, State = state, Detail = detail, Path = path, TimeUtc = timeUtc });
+    /// <summary>The audits raise a finding straight after the check it comes from. This keeps the two together for whoever wants one row per check.</summary>
+    public ConcurrentDictionary<RouteCheck, Finding> PairedFindings { get; } = new();
+    [ThreadStatic] static RouteCheck? _lastRoute;
+
+    public void Route(string area, string item, string value, CheckState state, string detail = "", string path = "", DateTime? timeUtc = null)
+    {
+        var route = new RouteCheck { Area = area, Item = item, Value = value, State = state, Detail = detail, Path = path, TimeUtc = timeUtc };
+        Routes.Add(route);
+        _lastRoute = state is CheckState.Bad or CheckState.Warning ? route : null;
+    }
 
     /// <summary>True when an event happened within a few minutes of a shutdown (services stop then).</summary>
     public bool NearShutdown(DateTime t) => ShutdownTimes.Any(s => Math.Abs((s - t).TotalMinutes) < 5);
 
-    public void Flag(Severity severity, FindingCategory category, string title, string detail, string? path = null, DateTime? timeUtc = null) =>
-        Findings.Add(new Finding { Severity = severity, Category = category, Title = title, Detail = detail, Path = path, TimeUtc = timeUtc });
+    public void Flag(Severity severity, FindingCategory category, string title, string detail, string? path = null, DateTime? timeUtc = null)
+    {
+        var finding = new Finding { Severity = severity, Category = category, Title = title, Detail = detail, Path = path, TimeUtc = timeUtc };
+        Findings.Add(finding);
+        if (_lastRoute is { } route) PairedFindings.TryAdd(route, finding);
+        _lastRoute = null;
+    }
 }
 
 /// <summary>Event-log reading helpers shared by the audits.</summary>

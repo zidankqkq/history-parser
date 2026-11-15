@@ -81,6 +81,8 @@ public sealed record ArgumentHit
     /// <summary>Why it was flagged (rule meanings), empty when nothing matched.</summary>
     public string Reasons { get; init; } = "";
     public bool Flagged => Reasons.Length > 0;
+    /// <summary>The Java agents on the whole command line, which <see cref="CommandLine"/> may be too short to still hold.</summary>
+    public IReadOnlyList<string> Agents { get; init; } = [];
 }
 
 public sealed record DriverRow
@@ -130,6 +132,41 @@ public sealed record DefenderChange
     public string NewValue { get; init; } = "";
     public string OldValue { get; init; } = "";
     public bool Suspicious { get; init; }
+    /// <summary>What the change means, in plain words (how long protection was off, what an exclusion covers …).</summary>
+    public string Detail { get; init; } = "";
+}
+
+/// <summary>Something the antivirus detected: what, where, which program touched it, and what was done about it.</summary>
+public sealed record DefenderDetection
+{
+    public DateTime? TimeUtc { get; init; }
+    public required string Threat { get; init; }
+    /// <summary>Defender's own grading (Severe, High, Medium, Low) and kind (Trojan, HackTool, Potentially Unwanted Software …).</summary>
+    public string Level { get; init; } = "";
+    public string Category { get; init; } = "";
+    /// <summary>The first file the detection names; every one is in <see cref="Paths"/>.</summary>
+    public string Path { get; init; } = "";
+    public IReadOnlyList<string> Paths { get; init; } = [];
+    /// <summary>The command line, when what was caught was a command as it ran (a hidden PowerShell download, say) and not a file.</summary>
+    public string Command { get; init; } = "";
+    /// <summary>The program that opened, wrote or ran the file when it was caught.</summary>
+    public string Process { get; init; } = "";
+    public string User { get; init; } = "";
+    /// <summary>Real-time protection, a scan, a download check …</summary>
+    public string FoundBy { get; init; } = "";
+    /// <summary>Quarantine, Remove, Allow, Restored from quarantine, or "No action recorded".</summary>
+    public string Action { get; init; } = "";
+    /// <summary>Whether the action worked, and what else is known: still on disk, ran, allowed afterwards.</summary>
+    public string Note { get; init; } = "";
+    /// <summary>The player kept it: allowed, restored from quarantine, or the action failed and the file is still there.</summary>
+    public bool Kept { get; init; }
+    public string DetectionId { get; init; } = "";
+    public string ThreatId { get; init; } = "";
+
+    /// <summary>What it was found in, for one table cell: the file, or the command that was caught.</summary>
+    [JsonIgnore] public string Where => Path.Length > 0 ? Path : Command.Length > 0 ? "command:  " + Command : "";
+    /// <summary>The name of the program that touched it, without its folder.</summary>
+    [JsonIgnore] public string TouchedBy => Process.Length == 0 ? "" : System.IO.Path.GetFileName(Process);
 }
 
 /// <summary>One whole scan: the execution history plus the tampering and bypass checks.</summary>
@@ -149,6 +186,18 @@ public sealed record RouteCheck
     public DateTime? TimeUtc { get; init; }
 }
 
+/// <summary>
+/// A time the rest of the scan is read against: when the PC started, when the user signed in, when the game started.
+/// A mark is a fact; <see cref="State"/> is only raised where the time itself is the problem (a restart, a clock change).
+/// </summary>
+public sealed record SessionMark
+{
+    public required string What { get; init; }
+    public DateTime? TimeUtc { get; init; }
+    public string Detail { get; init; } = "";
+    public CheckState State { get; init; } = CheckState.Ok;
+}
+
 public sealed class BypassReport
 {
     public required ScanResult History { get; init; }
@@ -165,7 +214,13 @@ public sealed class BypassReport
     public List<SoftwareRow> Software { get; init; } = new();
     public List<ArtifactChange> Artifacts { get; init; } = new();
     public List<DefenderChange> Defender { get; init; } = new();
+    /// <summary>What the antivirus detected, newest first.</summary>
+    public List<DefenderDetection> Detections { get; init; } = new();
+    /// <summary>The antivirus as it is now: what is protecting the PC, what is switched off, what it is told to ignore.</summary>
+    public List<IntegrityCheck> Antivirus { get; init; } = new();
     public List<RouteCheck> Routes { get; init; } = new();
+    /// <summary>The session's reference times, in order. They describe the PC at the scan, so no period cuts them.</summary>
+    public List<SessionMark> Session { get; init; } = new();
     public List<SourceStatus> Sources { get; init; } = new();
     public bool PrivateDetailsHidden { get; init; }
 }

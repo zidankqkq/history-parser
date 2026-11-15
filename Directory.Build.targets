@@ -1,0 +1,9 @@
+<Project>
+  <!-- The published programs refuse .NET startup hooks. A startup hook (the DOTNET_STARTUP_HOOKS environment variable) makes
+       every .NET program run someone else's code before its own - inside a screenshare tool that code could filter what the
+       tool reads and reports. Release programs only: development tools (hot reload, the test host) rely on hooks. This file
+       is read after each project, so the program's own type is known here. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' and ('$(OutputType)' == 'WinExe' or '$(OutputType)' == 'Exe') and '$(IsTestProject)' != 'true'">
+    <StartupHookSupport>false</StartupHookSupport>
+  </PropertyGroup>
+</Project>

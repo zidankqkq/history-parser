@@ -19,6 +19,7 @@ public static class TamperAnalysis
     public static void Run(IEnumerable<FileRecord> files, bool readNtfs)
     {
         using var ntfs = readNtfs ? new NtfsRecord.Reader() : null;
+        InstallerEvents = ReadInstallerEvents();
         foreach (var r in files)
         {
             bool ran = r.WasExecutedDirectly || r.WasLoaded;
@@ -181,7 +182,7 @@ public static class TamperAnalysis
         ["firefox.exe"] = [@"\Mozilla Firefox\"],
         ["steam.exe"] = [@"\Steam\"],
         ["obs64.exe"] = [@"\obs-studio\"],
-        ["minecraft.exe"] = [@"\Minecraft Launcher\", @"\Packages\Microsoft.4297127D64EC6", @"\XboxGames\"],
+        ["minecraft.exe"] = [@"\Minecraft Launcher\", @"\Packages\Microsoft.4297127D64EC6", @"\WindowsApps\Microsoft.4297127D64EC6", @"\XboxGames\"],
         ["minecraftlauncher.exe"] = [@"\Minecraft Launcher\", @"\Minecraft\"],
         ["lunar client.exe"] = [@"\Lunar Client\", @"\Programs\launcher\"],
     };
@@ -195,11 +196,20 @@ public static class TamperAnalysis
 
     static void WrongPlace(FileRecord r)
     {
-        // Files under C:\Windows are excluded before this runs, so a Windows name here is always out of place.
         if (WindowsNames.Contains(r.Name))
         {
-            Add(r, Severity.High, FindingCategory.AntiForensics, $"Windows program name outside Windows: {r.Name}",
-                $"{r.Name} is a Windows component, but this copy ran from {Path.GetDirectoryName(r.Path)}. Cheats use system names to blend in.");
+            // The real one is in the Windows folder and signed by Microsoft itself; both are checked, since neither alone
+            // says much (anything can be copied into the Windows folder, and a real copy can be run from anywhere).
+            bool inWindows = RoutineFiles.InWindowsFolder(r.Path);
+            bool microsoft = SignatureTrust.Of(r.Path).IsMicrosoft;
+            if (inWindows && microsoft) return;
+            if (inWindows)
+                Add(r, Severity.High, FindingCategory.AntiForensics, $"Windows program name on a file that is not Windows' own: {r.Name}",
+                    $"{r.Path} carries the name of a Windows component and sits in the Windows folder, but it is not signed by Microsoft. " +
+                    "The real one always is; a program put there under a system name is hiding in plain sight.");
+            else
+                Add(r, Severity.High, FindingCategory.AntiForensics, $"Windows program name outside Windows: {r.Name}",
+                    $"{r.Name} is a Windows component, but this copy ran from {Path.GetDirectoryName(r.Path)}. Cheats use system names to blend in.");
             return;
         }
         if (KnownHomes.TryGetValue(r.Name, out var homes) && !homes.Any(h => r.Path.Contains(h, StringComparison.OrdinalIgnoreCase)))
@@ -246,12 +256,32 @@ public static class TamperAnalysis
         if (r.WasExecutedDirectly && !r.IsWindowsFile && !RunnableExtensions.Contains(Path.GetExtension(r.Path)))
         {
             bool installer = Util.FileTypes.IsInstallerTemp(r.Path);
-            Add(r, installer ? Severity.Low : Severity.Medium, FindingCategory.AntiForensics, "Program with a disguised extension",
+            // Windows Installer runs a package's own helpers as MSI….tmp from its Installer folder. The name and folder prove
+            // nothing (a deleted file cannot be checked), so that only counts when the event log shows Windows Installer at
+            // work at that moment - an independent record of the install the helper belonged to.
+            bool msi = !installer && MsiHelper.IsMatch(r.Path) && r.LastExecutionUtc is { } ran && InstallerWasWorking(ran);
+            Add(r, installer || msi ? Severity.Low : Severity.Medium, FindingCategory.AntiForensics, "Program with a disguised extension",
                 $"{r.Name} was started as a program although its extension says it is not one. Renaming a program to " +
                 ".tmp/.png/.txt makes it look like a temporary or data file." +
-                (installer ? " It sits in an installer's own unpack folder in Temp, which is how Inno Setup and similar installers run." : ""));
+                (installer ? " It sits in an installer's own unpack folder in Temp, which is how Inno Setup and similar installers run."
+                    : msi ? " Windows Installer was installing or removing a product at that time (its own events say so), and this is how it runs a package's helpers."
+                    : ""));
         }
     }
+
+    static readonly Regex MsiHelper = new(@"\\Installer\\MSI[0-9A-F]{1,8}\.tmp$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// When Windows Installer logged that it was working (its own events in the Application log). Read once per scan, and
+    /// only if a scan asks: the window can stay open between two scans, and the second must see what was installed since.
+    /// </summary>
+    static Lazy<List<DateTime>> InstallerEvents = ReadInstallerEvents();
+
+    static Lazy<List<DateTime>> ReadInstallerEvents() => new(() =>
+        Bypass.Events.Read("Application", "*[System[Provider[@Name='MsiInstaller']]]", 20000)
+            .Select(Bypass.Events.Utc).Where(t => t.HasValue).Select(t => t!.Value).ToList());
+
+    static bool InstallerWasWorking(DateTime at) => InstallerEvents.Value.Any(t => (t - at).Duration() <= TimeSpan.FromMinutes(5));
 
     // ---- 5. Run through a host program ------------------------------------------------------------
 

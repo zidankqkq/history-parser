@@ -28,6 +28,14 @@ public sealed class ScanContext
     public DateTime NowUtc { get; }
     public DateTime BootUtc { get; set; }
     public DateTime? OsInstallUtc { get; set; }
+    /// <summary>When the user of this session signed in; null when Windows does not say.</summary>
+    public DateTime? SignInUtc { get; set; }
+    /// <summary>The games running at the scan, earliest start first.</summary>
+    public IReadOnlyList<GameStart> Games { get; set; } = [];
+    /// <summary>Java programs running at the scan that are not recognisably the game.</summary>
+    public IReadOnlyList<GameStart> OtherJava { get; set; } = [];
+    /// <summary>When the desktop shell started; set by the system-state check.</summary>
+    public DateTime? ShellStartUtc { get; set; }
 
     public ConcurrentBag<Evidence> Evidence { get; } = new();
     public ConcurrentBag<Finding> Findings { get; } = new();
@@ -40,6 +48,21 @@ public sealed class ScanContext
 
     /// <summary>Number of .pf files present; set by the Prefetch collector.</summary>
     public int PrefetchFileCount { get; set; } = -1;
+
+    /// <summary>
+    /// Runtime files a hash-verified copy of this suite loaded, by what Windows wrote in that copy's own Prefetch file. Kept so
+    /// that once such a file is deleted it is still known to have been ours - by Windows' record, not by the folder's name.
+    /// </summary>
+    public ConcurrentDictionary<string, byte> OwnRuntimeFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>When this program started. Everything Windows recorded from then on happened while the scan was running.</summary>
+    public DateTime ScanProcessStartUtc { get; } = OwnStart();
+
+    static DateTime OwnStart()
+    {
+        try { using var self = System.Diagnostics.Process.GetCurrentProcess(); return self.StartTime.ToUniversalTime(); }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { return DateTime.UtcNow; }
+    }
 
     public void Add(Evidence e) => Evidence.Add(e);
 

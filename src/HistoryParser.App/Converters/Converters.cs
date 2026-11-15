@@ -28,6 +28,11 @@ public sealed class ToneBrushConverter : IValueConverter
             CheckState.Ok or FileStatus.Exists => "Ok",
             FileStatus.Deleted or FileStatus.InRecycleBin or FileStatus.Renamed => "High",
             FileStatus.Missing or FileStatus.DriveNotConnected => "Medium",
+            // A signature that fails is proof the file changed after signing; no signature is only something to notice;
+            // a good one stays quiet so the other two stand out in a long list.
+            SignatureStatus.Invalid => "High",
+            SignatureStatus.Unsigned or SignatureStatus.Untrusted => "Medium",
+            SignatureStatus => "TextSub",
             bool b => b ? "Ok" : "High",
             _ => "Neutral",
         };

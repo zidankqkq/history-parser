@@ -21,14 +21,22 @@ public static class SelfTraces
     const string Repo = "zidankqkq/history-parser";
 
     /// <summary>The suite's programs. LogParser.exe is an older release, now part of History Parser.</summary>
-    static readonly string[] Apps = ["HistoryParser", "historyparser-cli", "ProgramChecker", "ClientParser", "MalwareChecker", "CheatStringFinder", "LogParser"];
+    static readonly string[] Apps = ["HistoryParser", "historyparser-cli", "ProgramChecker", "ClientParser", "MalwareChecker", "CheatStringFinder", "MinecraftScanner", "LogParser"];
     static readonly string[] Names = Apps.Select(a => a + ".exe").ToArray();
-    static readonly string[] Products = ["History Parser", "Program Checker", "Client Parser", "Malware Checker", "Cheat String Finder", "Log Parser"];
-    /// <summary>Where .NET single-file apps unpack their runtime (only Microsoft-signed files there count).</summary>
-    static readonly string[] RuntimeFolders = Apps.Select(a => $@"\.net\{a}\").ToArray();
+    static readonly string[] Products = ["History Parser", "Program Checker", "Client Parser", "Malware Checker", "Cheat String Finder", "Minecraft Scanner", "Log Parser"];
+    /// <summary>The suite's separate parser programs: not verified by hash here, but they unpack the same runtime.</summary>
+    static readonly string[] Parsers = ["Correlator", "DataFileParser", "EventLogParser", "LiveParser", "NtfsParser", "RegistryParser", "TotalParser", "RatChecker"];
+    /// <summary>
+    /// Where .NET single-file apps unpack their runtime: %TEMP%\.net\&lt;program name&gt;\&lt;build id&gt;\. The folder is named after
+    /// the file as it was run, so a second download ("HistoryParser (3).exe") gets "HistoryParser (3)". Only Microsoft-signed
+    /// libraries that are still there count, so the name of the folder decides nothing by itself.
+    /// </summary>
+    static readonly System.Text.RegularExpressions.Regex RuntimeFolder = new(
+        @"\\\.net\\(?:" + string.Join("|", Apps.Concat(Parsers).Select(System.Text.RegularExpressions.Regex.Escape)) + @")(?: \(\d+\))?\\",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>The suite's programs in plain words, for notes.</summary>
-    const string SuiteText = "this screenshare suite (History Parser, Program Checker, Client Parser, Malware Checker or Cheat String Finder)";
+    const string SuiteText = "this screenshare suite (History Parser, Program Checker, Client Parser, Malware Checker, Cheat String Finder or Minecraft Scanner)";
 
     /// <summary>Yes = verified copy of this program; Unverified = claims to be it (version text only); NameOnly = gone, name only.</summary>
     public enum Match { No, Yes, Unverified, NameOnly }
@@ -39,15 +47,15 @@ public static class SelfTraces
         string name = Path.GetFileName(path);
         // Browsers save a second download as "HistoryParser (1).exe"; the version info below still has to agree.
         bool ourName = Names.Contains(System.Text.RegularExpressions.Regex.Replace(name, @" \(\d+\)(?=\.exe$)", ""), StringComparer.OrdinalIgnoreCase);
-        bool runtimeFolder = RuntimeFolders.Any(f => path.Contains(f, StringComparison.OrdinalIgnoreCase));
+        bool runtimeFolder = InRuntimeFolder(path);
         if (!ourName && !runtimeFolder) return Match.No;
         if (!File.Exists(path)) return ourName ? Match.NameOnly : Match.No;
         if (!ourName)
         {
-            // The runtime .NET unpacks for us is Microsoft's own, validly signed. Version text can be forged; a signature cannot.
-            return FileInspector.Verify(path) == SignatureStatus.Signed &&
-                   (FileInspector.SignerName(path) ?? "").Contains("Microsoft", StringComparison.OrdinalIgnoreCase)
-                ? Match.Yes : Match.No;
+            // The runtime .NET unpacks for us is Microsoft's own libraries, validly signed, with a chain that ends in Microsoft's
+            // root. Only libraries: nothing we unpack is a program, so a Microsoft-signed program copied into a folder named like
+            // ours (a Java runtime, PowerShell) is the player's, and what it ran stays in the records.
+            return path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && SignatureTrust.Of(path).IsMicrosoft ? Match.Yes : Match.No;
         }
         // Our own copy is byte-for-byte the program running now or one of the suite's programs from the same
         // release. Anything that only claims to be one of them in its version info stays visible as "unverified".
@@ -64,9 +72,23 @@ public static class SelfTraces
     static readonly Lazy<HashSet<string>> TrustedHashes = new(() =>
     {
         var set = new HashSet<string>(SuiteHashes(), StringComparer.OrdinalIgnoreCase);
-        if (Environment.ProcessPath is { } self && Sha256(self) is { } own) set.Add(own);
+        if (OwnHash is { } own) set.Add(own);
         return set;
     });
+
+    /// <summary>
+    /// SHA-256 of the file this program was started from, in lower case as a release's SHA256SUMS.txt writes it; null when the
+    /// file cannot be read. Shown so the reader can tell which build is on screen. It is the program's word about itself: a
+    /// changed build can show any hash, so the check that counts is Windows hashing the file (certutil -hashfile).
+    /// </summary>
+    public static string? OwnHash => Own.Value;
+    static readonly Lazy<string?> Own = new(() => Environment.ProcessPath is { } self ? Sha256(self)?.ToLowerInvariant() : null);
+
+    /// <summary>
+    /// True when the program's code is inside the file it was started from, as in a published build. A developer build keeps
+    /// its code in libraries beside the launcher, so the launcher's hash says nothing about what runs.
+    /// </summary>
+    public static bool OneFile => !File.Exists(Path.Combine(AppContext.BaseDirectory, typeof(SelfTraces).Assembly.GetName().Name + ".dll"));
 
     /// <summary>The hashes built in by publish.ps1 (none in a developer build).</summary>
     internal static IEnumerable<string> SuiteHashes() =>
@@ -119,13 +141,24 @@ public static class SelfTraces
     }
 
     /// <summary>History Parser: tag files and their findings, and findings about our launcher command.</summary>
-    public static void Mark(IEnumerable<FileRecord> files, List<Finding> findings)
+    /// <param name="loadedByVerifiedCopy">
+    /// Runtime files a hash-verified copy of this suite loaded, as Windows recorded in that copy's Prefetch file. Such a file is
+    /// ours even after it is deleted: the proof is Windows' record of what our program opened, not the name of the folder.
+    /// </param>
+    public static void Mark(IEnumerable<FileRecord> files, List<Finding> findings, IEnumerable<string>? loadedByVerifiedCopy = null)
     {
         var ours = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var loaded = new HashSet<string>(loadedByVerifiedCopy ?? [], StringComparer.OrdinalIgnoreCase);
         foreach (var r in files)
         {
             switch (Classify(r.Path))
             {
+                case Match.No when InRuntimeFolder(r.Path) && !File.Exists(r.Path) && loaded.Contains(r.Path) &&
+                                   r.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase):
+                    r.IsThisTool = true;
+                    r.StatusDetail = $"{Label} (a runtime library a verified copy of {SuiteText} unpacked and loaded, by its own Prefetch record; since deleted). {r.StatusDetail}".Trim();
+                    ours.Add(r.Path);
+                    break;
                 case Match.Yes:
                     r.IsThisTool = true;
                     r.StatusDetail = $"{Label} ({SuiteText}, or the runtime it unpacks; the same file as the one next to the running program). {r.StatusDetail}".Trim();
@@ -140,7 +173,22 @@ public static class SelfTraces
                     Note(r, $"Says it is part of {SuiteText}, but it is not the same file as the copy next to the running program — " +
                             "an older version, a copy kept in another folder, or something pretending to be it. Not treated as this program.");
                     break;
+                // Earlier runs leave their unpacked runtime behind, and it is later deleted. Gone, nothing can say whose it was, so it stays as it is.
+                case Match.No when InRuntimeFolder(r.Path) && !File.Exists(r.Path):
+                    Note(r, $"In a folder named like the one {SuiteText} unpacks its runtime to, likely from an earlier run. " +
+                            "The file is gone, so that cannot be confirmed, and anything can be put in a folder of that name.");
+                    break;
             }
+        }
+        // Windows writes a Prefetch file for each run of this program. One is ours only when Prefetch itself ties it to a verified copy:
+        // a .pf named like ours proves nothing.
+        var ownPrefetch = files.Where(f => f.IsThisTool).SelectMany(f => f.Evidence)
+            .Where(e => e.Source == EvidenceSource.Prefetch && e.Origin is { Length: > 0 }).Select(e => e.Origin!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in files.Where(f => !f.IsThisTool && IsPrefetchFile(f.Path) && ownPrefetch.Contains(Path.GetFileName(f.Path))))
+        {
+            r.IsThisTool = true;
+            r.StatusDetail = $"{Label} (the Prefetch file Windows keeps for a verified copy of {SuiteText}). {r.StatusDetail}".Trim();
+            ours.Add(r.Path);
         }
         for (int i = 0; i < findings.Count; i++)
             if (IsOurs(findings[i], ours)) findings[i] = Tag(findings[i]);
@@ -155,7 +203,17 @@ public static class SelfTraces
         return findings.Select(f => f.ByThisTool || IsOurs(f, ours) || (f.Path != null && Classify(f.Path) == Match.Yes) ? Tag(f) : f).ToList();
     }
 
-    static void Note(FileRecord r, string text) => r.StatusDetail = (r.StatusDetail + " " + text).Trim();
+    internal static bool InRuntimeFolder(string path) => RuntimeFolder.IsMatch(path);
+
+    static bool IsPrefetchFile(string path) =>
+        path.EndsWith(".pf", StringComparison.OrdinalIgnoreCase) && Path.GetDirectoryName(path) is { } folder && folder.EndsWith(@"\Windows\Prefetch", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Adds a sentence to what the file's row says, after whatever it says already.</summary>
+    internal static void Note(FileRecord r, string text)
+    {
+        string said = (r.StatusDetail ?? "").Trim();
+        r.StatusDetail = said.Length == 0 ? text : said + (said[^1] is '.' or '!' or '?' or ':' ? " " : ". ") + text;
+    }
 
     // Only a verified file or our exact launcher command makes a finding ours. A finding that merely mentions one
     // of our folders is not enough: anything can be put in (or deleted from) a folder named like ours.

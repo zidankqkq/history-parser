@@ -42,6 +42,16 @@ jobs:
         with:
           subject-path: publish/HistoryParser.exe
 
+      - name: Remove an earlier release of this tag
+        # A tag that is pushed again replaces its release. Without this the earlier files would stay beside the new ones.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete "${{ github.ref_name }}" --yes 2>$null
+          exit 0
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:

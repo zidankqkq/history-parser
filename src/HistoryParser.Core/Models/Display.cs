@@ -16,7 +16,7 @@ public static class Display
         FindingCategory.Usb => "USB",
         FindingCategory.Arguments => "Arguments",
         FindingCategory.Process => "Process",
-        FindingCategory.Defender => "Defender",
+        FindingCategory.Defender => "Antivirus",
         FindingCategory.Persistence => "Scheduled task / install",
         FindingCategory.Boot => "Boot & kernel",
         FindingCategory.Hardware => "Hardware",
@@ -68,6 +68,7 @@ public static class Display
         EvidenceSource.Defender => "Defender",
         EvidenceSource.CapabilityAccess => "Privacy access",
         EvidenceSource.JumpList => "Jump list",
+        EvidenceSource.LoadedDriver => "Kernel",
         _ => s.ToString(),
     };
 

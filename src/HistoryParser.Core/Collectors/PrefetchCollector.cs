@@ -70,12 +70,19 @@ public sealed class PrefetchCollector : ICollector
             // A verified copy of this suite only reads files (that is how it checks them): what it touched during a scan is
             // not something the player ran. Its own run is still recorded above. Trusted by exact hash only, never by name.
             bool suite = pf.FileNames.Count > 0 && Analysis.SelfTraces.Classify(exePath) == Analysis.SelfTraces.Match.Yes;
-            if (suite) ownReads += pf.FileNames.Count(n => LoadedExtensions.Contains(Path.GetExtension(n)));
+            if (suite)
+            {
+                ownReads += pf.FileNames.Count(n => LoadedExtensions.Contains(Path.GetExtension(n)));
+                // What a verified copy of this suite loaded from its own unpack folder is its runtime - still known to be so
+                // after the file is deleted, because Windows wrote it down here.
+                foreach (var n in pf.FileNames.Where(n => n.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
+                    ctx.OwnRuntimeFiles.TryAdd(ctx.Paths.Normalize(n), 0);
+            }
             foreach (var name in suite ? [] : pf.FileNames)
             {
                 var ext = Path.GetExtension(name);
                 // Java does not care what a jar is called: one renamed to .png still runs. Every other file Java opened
-                // outside Windows is checked by its content.
+                // is checked by its content, wherever it is.
                 if (java && !LoadedExtensions.Contains(ext) && DisguisedJar(ctx, ctx.Paths.Normalize(name), pf.ExecutableName, fi.Name, lastRun))
                 {
                     items++;
@@ -87,9 +94,7 @@ public sealed class PrefetchCollector : ICollector
                 var p = ctx.Paths.Normalize(name);
                 bool script = FileTypes.FromPath(p) == FileType.Script;
                 // Interpreters load their own library scripts by the hundred; keep only the user's.
-                if (script && (FileTypes.IsWindowsFile(p) || p.Contains(@"\Program Files", StringComparison.OrdinalIgnoreCase) ||
-                               p.Contains(@"\Lib\", StringComparison.OrdinalIgnoreCase) || p.Contains("site-packages", StringComparison.OrdinalIgnoreCase) ||
-                               p.Contains(@"\Programs\Python", StringComparison.OrdinalIgnoreCase))) continue;
+                if (script && IsInterpreterLibrary(p, exePath, pf.ExecutableName)) continue;
                 if (PathNormalizer.Key(p) == exeKey) continue;
                 // The Recycle Bin's info records keep the deleted file's extension ($IAB12CD.jar), and Explorer and scanners read
                 // them all. They are bookkeeping, not programs - unless Java opened one, or the file there is not such a record.
@@ -143,12 +148,32 @@ public sealed class PrefetchCollector : ICollector
     }
 
     /// <summary>
+    /// A script that belongs to the interpreter that opened it, not to the user. Only two things count: a valid Microsoft
+    /// signature on the script itself (PowerShell's own modules carry one), or the script sitting inside the folder the
+    /// interpreter itself runs from (Python's and Node's standard libraries). A folder merely named "Lib", "site-packages" or
+    /// "Program Files" does not: anyone can make one and keep a clicker script in it.
+    /// </summary>
+    internal static bool IsInterpreterLibrary(string script, string interpreterPath, string interpreterName)
+    {
+        // Not for interpreters in the Windows folder (wscript, mshta, PowerShell): "inside their folder" would be all of
+        // System32, parts of which anyone can write to. Their own scripts are covered by the signature test below.
+        if (interpreterPath.Length > 3 && interpreterPath[1] == ':' && Path.GetDirectoryName(interpreterPath) is { Length: > 3 } home &&
+            !Analysis.RoutineFiles.InWindowsFolder(interpreterPath) &&
+            script.StartsWith(home.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) &&
+            !Path.GetDirectoryName(script)!.Equals(home.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) return true;
+        // Node resolves packages from node_modules folders next to the project; thousands of .js files that are not what was run.
+        if (interpreterName.StartsWith("NODE.EXE", StringComparison.OrdinalIgnoreCase) && script.Contains(@"\node_modules\", StringComparison.OrdinalIgnoreCase)) return true;
+        return File.Exists(script) && Analysis.SignatureTrust.Of(script).IsMicrosoft;
+    }
+
+    /// <summary>
     /// A file Java opened that is really a jar under another name: recorded as a jar (so it is listed with the jars) and
-    /// flagged. Files in Windows' folder or with a normal Java-code name are not opened; a deleted file cannot be checked.
+    /// flagged. Checked by content wherever the file is - the Windows folder is no exception, since parts of it can be written
+    /// to without administrator rights. A file with a normal Java-code name is not opened; a deleted file cannot be checked.
     /// </summary>
     static bool DisguisedJar(ScanContext ctx, string path, string loader, string pfName, DateTime? lastRun)
     {
-        if (path.StartsWith('[') || FileTypes.IsWindowsFile(path) || FileTypes.IsJavaContainerName(path) || !File.Exists(path)) return false;
+        if (path.StartsWith('[') || FileTypes.IsJavaContainerName(path) || !File.Exists(path)) return false;
         if (!FileTypes.IsJavaArchive(path)) return false;
         string ext = Path.GetExtension(path);
         ctx.Add(new Evidence

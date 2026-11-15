@@ -22,9 +22,13 @@ public static class Scanner
     {
         var started = DateTime.UtcNow;
         var boot = started - TimeSpan.FromMilliseconds(Environment.TickCount64);
+        var java = SessionTimes.RunningJava();
         var ctx = new ScanContext(options, PathNormalizer.ForThisMachine(), started, boot)
         {
             OsInstallUtc = OsInstallDate(),
+            SignInUtc = SessionTimes.SignInUtc(),
+            Games = java.Where(g => !g.Unrecognised).ToList(),
+            OtherJava = java.Where(g => g.Unrecognised).ToList(),
         };
 
         // Prefetch runs first: the USN collector needs to know how full the Prefetch folder is.
@@ -35,7 +39,7 @@ public static class Scanner
             new ShimCacheCollector(), new MuiCacheCollector(), new JavaUsageCollector(), new RecycleBinCollector(),
             new ShellHistoryCollector(), new EventLogCollector(), new UsnJournalCollector(), new ProcessMemoryCollector(),
             new AmcacheCollector(), new RecentShortcutCollector(), new JumpListCollector(), new ExplorerUsageCollector(), new CrashReportCollector(),
-            new CapabilityAccessCollector(),
+            new CapabilityAccessCollector(), new LoadedDriverCollector(), new DefenderDetectionCollector(),
         ];
         int total = rest.Length + 3, done = 0;
         var statuses = new ConcurrentBag<SourceStatus>();
@@ -62,7 +66,7 @@ public static class Scanner
         }
 
         RunOne(first);
-        Parallel.ForEach(rest, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, RunOne);
+        Parallel.ForEach(rest, new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 4, 8), CancellationToken = ct }, RunOne);
 
         progress?.Report(new ScanProgress("Correlating timestamps…", ++done, total));
         var clockChanges = Dedupe(ctx.ClockChanges).OrderBy(c => c.NewTimeUtc).ToList();
@@ -86,18 +90,36 @@ public static class Scanner
         var significant = clockChanges.Where(c => c.Severity >= Severity.Medium || c.IsRollback).ToList();
         var correlator = new Correlator(started, options.Tolerance, significant, running);
         var evidence = ctx.Evidence.ToList();
+        var since = TimeWindows.Since(options.Window, started, boot, ctx.SignInUtc, ctx.Games.Count > 0 ? ctx.Games[0].StartUtc : null);
+
+        // Which files are routine (Windows' own, or a known publisher's) is decided by verifying each one, never by its
+        // folder - so it has to be worked out before the records are built. Only files inside the chosen period are
+        // verified; older ones stay "not checked", which keeps them in view.
+        if (options.InspectFiles)
+        {
+            progress?.Report(new ScanProgress("Verifying which files are Windows' own…", done, total));
+            RoutineFiles.Forget();
+            RoutineFiles.Prime(RecentPaths(evidence, since), ct);
+        }
         var files = correlator.Build(evidence);
 
         // Hashing and signature checks are the slow part, so only files inside the chosen period get them; every
         // cross-check above already ran on the full history.
-        var since = TimeWindows.Since(options.Window, started, boot);
         var shown = since is { } from ? files.Where(f => f.LastActivityUtc >= from).ToList() : files;
 
         if (options.InspectFiles)
         {
             progress?.Report(new ScanProgress("Hashing and checking signatures…", ++done, total));
             Parallel.ForEach(shown.Where(FileInspector.ShouldInspect),
-                new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, FileInspector.Inspect);
+                new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 4, 12), CancellationToken = ct }, FileInspector.Inspect);
+            // Files that were verified but are not hashed (libraries in Program Files, Windows' own) still say who signed them.
+            foreach (var r in shown.Where(r => r.Signature == SignatureStatus.NotChecked && r.Status == FileStatus.Exists && r.Type is FileType.Exe or FileType.Dll))
+            {
+                var facts = SignatureTrust.Of(r.Path);
+                if (facts.Status == SignatureStatus.NotChecked) continue;
+                r.Signature = r.IsWindowsFile ? SignatureStatus.WindowsFile : FileInspector.Verify(r.Path);
+                if (facts.Status is SignatureStatus.Signed or SignatureStatus.Invalid or SignatureStatus.Untrusted) r.Signer = FileInspector.SignerName(r.Path);
+            }
         }
 
         // Renamed / disguised programs, faked dates, hidden streams, host programs. Reading NTFS's own
@@ -108,7 +130,7 @@ public static class Scanner
 
         // Our own runs, unpacked runtime and launcher are labelled and taken out of the counts.
         var general = ctx.Findings.ToList();
-        SelfTraces.Mark(files, general);
+        SelfTraces.Mark(files, general, ctx.OwnRuntimeFiles.Keys);
         var findings = general.Concat(files.SelectMany(f => f.Findings))
             .OrderByDescending(f => f.Severity).ThenByDescending(f => f.TimeUtc ?? DateTime.MinValue).ToList();
 
@@ -122,9 +144,15 @@ public static class Scanner
                 OsVersion = OsVersion(),
                 BootTimeUtc = boot,
                 OsInstallUtc = ctx.OsInstallUtc,
+                SignInUtc = ctx.SignInUtc,
+                ShellStartUtc = ctx.ShellStartUtc,
+                GameStartUtc = ctx.Games.Count > 0 ? ctx.Games[0].StartUtc : null,
+                GameProgram = ctx.Games.Count > 0 ? $"{ctx.Games[0].Program} (pid {ctx.Games[0].Pid})" : "",
+                Games = SessionTimes.AllGames(ctx.Games, evidence, ctx.OtherJava),
                 TimeZone = TimeZoneInfo.Local.DisplayName,
                 IsElevated = WinApi.IsElevated(),
                 ToolVersion = Version,
+                ToolSha256 = SelfTraces.OneFile ? SelfTraces.OwnHash ?? "" : "",
             },
             StartedUtc = started,
             FinishedUtc = DateTime.UtcNow,
@@ -150,9 +178,12 @@ public static class Scanner
     /// deletion today still knows about a run two weeks ago. A file stays (with all its evidence) when
     /// anything about it happened in the period; undated findings describe the PC now and always stay.
     /// </summary>
-    public static ScanResult Trim(ScanResult r, TimeWindow window)
+    public static ScanResult Trim(ScanResult r, TimeWindow window) => Trim(r, window, null);
+
+    /// <param name="gameStartUtc">The game the "since the game started" period is measured from, when the reader picked one; otherwise the scan's own.</param>
+    public static ScanResult Trim(ScanResult r, TimeWindow window, DateTime? gameStartUtc)
     {
-        if (TimeWindows.Since(window, r.StartedUtc, r.Machine.BootTimeUtc) is not { } s)
+        if (TimeWindows.Since(window, r.StartedUtc, r.Machine.BootTimeUtc, r.Machine.SignInUtc, gameStartUtc ?? r.Machine.GameStartUtc) is not { } s)
             return Copy(r, window, null, r.Files, r.Findings, r.Timeline, r.ClockChanges, r.ServiceEvents, r.Commands, r.Folders);
         var files = r.Files.Where(f => f.LastActivityUtc >= s).ToList();
         var kept = files.Select(f => f.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -173,6 +204,21 @@ public static class Scanner
         Checks = r.Checks, Sources = r.Sources, ClockChanges = clock, MemoryHits = r.MemoryHits, ServiceEvents = services,
         Commands = commands, Folders = folders, Timeline = timeline, PrivateDetailsHidden = r.PrivateDetailsHidden, Window = window, SinceUtc = since,
     };
+
+    /// <summary>Paths of programs and libraries with anything dated inside the period (every one when there is no period).</summary>
+    static List<string> RecentPaths(List<Evidence> evidence, DateTime? since)
+    {
+        var latest = new Dictionary<string, (string Path, DateTime? Time)>(StringComparer.Ordinal);
+        foreach (var e in evidence)
+        {
+            if (e.Path.Length < 4 || e.Path[1] != ':') continue;
+            if (FileTypes.FromPath(e.Path) is not (FileType.Exe or FileType.Dll)) continue;
+            var key = PathNormalizer.Key(e.Path);
+            if (!latest.TryGetValue(key, out var seen) || e.TimeUtc > seen.Time || (seen.Time == null && e.TimeUtc != null))
+                latest[key] = (e.Path, e.TimeUtc ?? seen.Time);
+        }
+        return latest.Values.Where(v => since is not { } from || v.Time >= from).Select(v => v.Path).ToList();
+    }
 
     static IEnumerable<ClockChange> Dedupe(IEnumerable<ClockChange> changes) =>
         changes.GroupBy(c => (c.Source, c.OldTimeUtc.Ticks / TimeSpan.TicksPerSecond, c.NewTimeUtc.Ticks / TimeSpan.TicksPerSecond))

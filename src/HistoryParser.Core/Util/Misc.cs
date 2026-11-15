@@ -128,15 +128,27 @@ public static class FileTypes
         Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".ico" or ".webp" or ".txt" or ".log"
             or ".ini" or ".cfg" or ".json" or ".xml" or ".pdf" or ".doc" or ".docx" or ".mp3" or ".mp4" or ".wav" or ".ogg" or ".exe" or ".dll";
 
+    /// <summary>
+    /// File names the change journal is read for: programs, libraries, drivers, jars, Prefetch files, and the scripts an
+    /// interpreter runs. Not .js: web projects and app updates create those by the thousand, and one that was run through
+    /// Windows Script Host is still recorded by Prefetch.
+    /// </summary>
     public static bool IsInteresting(ReadOnlySpan<char> name) =>
         name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+        name.EndsWith(".sys", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".jar", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".pf", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".bat", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".vbs", StringComparison.OrdinalIgnoreCase) ||
+        name.EndsWith(".py", StringComparison.OrdinalIgnoreCase) ||
+        name.EndsWith(".pyw", StringComparison.OrdinalIgnoreCase) ||
+        name.EndsWith(".hta", StringComparison.OrdinalIgnoreCase) ||
+        name.EndsWith(".wsf", StringComparison.OrdinalIgnoreCase) ||
+        name.EndsWith(".scr", StringComparison.OrdinalIgnoreCase) ||
+        name.EndsWith(".com", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".ahk", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -156,12 +168,14 @@ public static class FileTypes
         name.Equals("SRUDB.dat", StringComparison.OrdinalIgnoreCase) ||
         name.StartsWith(".attach_pid", StringComparison.OrdinalIgnoreCase);
 
-    static readonly string WindowsDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd('\\') + "\\";
-
-    /// <summary>Files shipped with Windows; hidden by default in the UI to cut noise.</summary>
+    /// <summary>
+    /// One of Windows' own files: in the Windows folder, on disk now, and verified by its signature (see
+    /// <see cref="Analysis.RoutineFiles"/>). Being in the Windows folder is not enough - anything can be copied there, parts of
+    /// it are writable without administrator rights, and a file that is gone cannot be verified at all. Reads the file the first
+    /// time it is asked about.
+    /// </summary>
     public static bool IsWindowsFile(string path) =>
-        path.StartsWith(WindowsDir, StringComparison.OrdinalIgnoreCase) ||
-        path.Contains(@"\WindowsApps\", StringComparison.OrdinalIgnoreCase);
+        Analysis.RoutineFiles.InWindowsFolder(path) && Analysis.RoutineFiles.Reason(path) != null;
 
     // Inno Setup (is-XXXX.tmp), NSIS (nsXXXX.tmp), 7-Zip SFX (7zSXXXX) and WiX Burn ({GUID}\.be / .cr) unpack folders.
     static readonly System.Text.RegularExpressions.Regex InstallerFolder = new(

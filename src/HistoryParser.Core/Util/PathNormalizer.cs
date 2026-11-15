@@ -31,13 +31,35 @@ public sealed class PathNormalizer
 
     public static string Key(string path) => path.ToUpperInvariant();
 
+    static readonly string WindowsFolder = (Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows").TrimEnd('\\');
+
+    /// <summary>A name followed by a colon, longer than a drive letter: a label or web address rather than a path.</summary>
+    public static bool HasScheme(string p)
+    {
+        int colon = p.IndexOf(':');
+        if (colon < 2 || !char.IsAsciiLetter(p[0])) return false;
+        for (int i = 1; i < colon; i++)
+            if (!char.IsAsciiLetterOrDigit(p[i]) && p[i] is not ('-' or '+' or '.')) return false;
+        return true;
+    }
+
     public string Normalize(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
-        string p = raw.Trim().TrimEnd('\0').Replace('/', '\\');
+        string p = raw.Trim().TrimEnd('\0');
+        if (p.Length > 1 && p[0] == '"' && p[^1] == '"') p = p[1..^1];
+        // Anything with a scheme ("https:", "net:", "service:") is not a file path to rewrite.
+        if (HasScheme(p)) return p;
+        p = p.Replace('/', '\\');
+        // Another spelling of a device path, including a shadow copy's.
+        if (p.StartsWith(@"\\?\GLOBALROOT\", StringComparison.OrdinalIgnoreCase) || p.StartsWith(@"\\.\GLOBALROOT\", StringComparison.OrdinalIgnoreCase)) p = p[14..];
 
         if (p.StartsWith(@"\\?\", StringComparison.Ordinal) || p.StartsWith(@"\??\", StringComparison.Ordinal))
             p = p[4..];
+
+        // How services and drivers name their files, relative to the Windows folder.
+        if (p.StartsWith(@"\SystemRoot\", StringComparison.OrdinalIgnoreCase)) return Collapse(WindowsFolder + p[11..]);
+        if (p.StartsWith(@"System32\", StringComparison.OrdinalIgnoreCase)) return Collapse(WindowsFolder + "\\" + p);
 
         if (p.StartsWith(@"\DEVICE\", StringComparison.OrdinalIgnoreCase))
         {
@@ -99,6 +121,12 @@ public sealed class PathNormalizer
         new("0762D272-C50A-4BB0-A382-697DCD729B80"), // UserProfiles
         new("A77F5D77-2E2B-44C3-A6A2-ABA601054A51"), // Programs (start menu)
         new("0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8"), // CommonPrograms
+        new("9E3995AB-1F9C-4F13-B827-48B24B6C7174"), // UserPinned
+        new("625B53C3-AB48-4EC1-BA1F-A1EF4146FC19"), // StartMenu
+        new("A4115719-D62E-491D-AA7C-E74B8BE3B067"), // CommonStartMenu
+        new("AE50C081-EBD2-438A-8655-8A092E34987A"), // Recent
+        new("B97D20BB-F46A-4C97-BA10-5E3608430854"), // Startup
+        new("82A5EA35-D9CD-47C5-9629-E15D2F714E6E"), // CommonStartup
     ];
 
     public static PathNormalizer ForThisMachine()

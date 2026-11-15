@@ -55,6 +55,9 @@ public sealed class TamperViewModel : ObservableObject
         ["Evidence"] = ("Evidence files", "Event logs, prefetch, Amcache, recent items, jump lists and shell history that were deleted, emptied or turned off."),
         ["Clock"] = ("Clock & integrity", "Clock changes and the health of every evidence source."),
         ["Checks"] = ("", ""),
+        ["Antivirus"] = ("Antivirus", "What is protecting the PC now, what the antivirus caught and what was done about each, when protection was switched off and what it was told to skip."),
+        ["AvChanges"] = ("", ""),
+        ["AvNow"] = ("", ""),
     };
 
     readonly Dictionary<string, ListCollectionView> _views = new();
@@ -69,11 +72,15 @@ public sealed class TamperViewModel : ObservableObject
     public ListCollectionView EvidenceView => _views["Evidence"];
     public ListCollectionView ClockView => _views["Clock"];
     public ListCollectionView ChecksView => _views["Checks"];
+    /// <summary>What the antivirus caught (the page's main table), the changes to its protection, and its state now.</summary>
+    public ListCollectionView AntivirusView => _views["Antivirus"];
+    public ListCollectionView AvChangesView => _views["AvChanges"];
+    public ListCollectionView AvNowView => _views["AvNow"];
 
-    /// <summary>Second table shown on the same page.</summary>
-    static string? Companion(string page) => page switch
+    /// <summary>The other tables shown on the same page.</summary>
+    static string[] Companions(string page) => page switch
     {
-        "Logs" => "Gaps", "Services" => "ServiceEvents", "Usb" => "UsbEvents", "Clock" => "Checks", _ => null,
+        "Logs" => ["Gaps"], "Services" => ["ServiceEvents"], "Usb" => ["UsbEvents"], "Clock" => ["Checks"], "Antivirus" => ["AvChanges"], _ => [],
     };
 
     string _page = "Overview";
@@ -83,7 +90,7 @@ public sealed class TamperViewModel : ObservableObject
         set
         {
             if (!Set(ref _page, value)) return;
-            _search = "";
+            _search = ""; _query = Core.Util.SearchQuery.Empty;
             OnPropertyChanged(nameof(Search));
             OnPropertyChanged(nameof(PageTitle));
             OnPropertyChanged(nameof(PageSubtitle));
@@ -104,7 +111,7 @@ public sealed class TamperViewModel : ObservableObject
 
     // ---- details panel ------------------------------------------------------------------------------
     /// <summary>Pages whose rows open a details panel. Services, logs and the clock page say everything in the row.</summary>
-    static readonly HashSet<string> DetailPages = ["Evidence", "Arguments", "Usb"];
+    static readonly HashSet<string> DetailPages = ["Evidence", "Arguments", "Usb", "Antivirus"];
     public bool HasDetailsPanel => DetailPages.Contains(Page);
 
     readonly Dictionary<string, object> _selectedByPage = new();
@@ -128,13 +135,16 @@ public sealed class TamperViewModel : ObservableObject
 
     // ---- filters ------------------------------------------------------------------------------------
     string _search = "";
-    public string Search { get => _search; set { if (Set(ref _search, value)) { _filterTimer.Stop(); _filterTimer.Start(); } } }
-    // On by default: most rows say "checked, fine"; the count of hidden ones is shown and one click brings them back.
-    bool _flaggedOnly = true;
-    public bool FlaggedOnly { get => _flaggedOnly; set { if (Set(ref _flaggedOnly, value)) RefreshCurrent(); } }
-    bool _hideTemp;
-    /// <summary>Hide unflagged rows whose file is in a Temp folder (only offered on pages where such rows appear).</summary>
-    public bool HideTemp { get => _hideTemp; set { if (Set(ref _hideTemp, value)) RefreshCurrent(); } }
+    public string Search { get => _search; set { if (Set(ref _search, value)) { _query = Core.Util.SearchQuery.Parse(value); _filterTimer.Stop(); _filterTimer.Start(); } } }
+    Core.Util.SearchQuery _query = Core.Util.SearchQuery.Empty;
+    // The same model as the other pages: what is kept out of the way sits behind one "N hidden" button, with a count and
+    // a switch for each kind. Here that is the rows that say "checked, fine" - most of every table - and, among those, the
+    // ones about temporary files. A flagged row is never hidden by either.
+    bool _showUnflagged;
+    public bool ShowUnflagged { get => _showUnflagged; set { if (Set(ref _showUnflagged, value)) RefreshCurrent(); } }
+    bool _showTemp;
+    /// <summary>With unflagged rows shown: also the ones whose file is in a Temp folder (only offered on pages where such rows appear).</summary>
+    public bool ShowTemp { get => _showTemp; set { if (Set(ref _showTemp, value)) RefreshCurrent(); } }
     static readonly HashSet<string> TempPages = ["Findings", "Evidence", "Arguments"];
     public bool ShowTempToggle => TempPages.Contains(Page);
 
@@ -154,6 +164,8 @@ public sealed class TamperViewModel : ObservableObject
         SoftwareRow s => s.Flagged,
         ArtifactChange a => a.Suspicious,
         DefenderChange d => d.Suspicious,
+        // Every detection is listed: what the antivirus caught is the record, whatever was done about it.
+        DefenderDetection => true,
         ClockChange => true,
         IntegrityCheck c => c.State is CheckState.Bad or CheckState.Warning,
         RouteCheck r => r.State is CheckState.Bad or CheckState.Warning,
@@ -162,26 +174,36 @@ public sealed class TamperViewModel : ObservableObject
 
     bool Filter(object o)
     {
-        if (FlaggedOnly && !IsFlagged(o)) return false;
-        // Flagged rows always stay: being in Temp must never be a way to slip past the screensharer.
-        if (HideTemp && !IsFlagged(o) && DetailView.IsTempRow(o)) return false;
+        if (!IsFlagged(o))
+        {
+            // Flagged rows always stay: being in Temp must never be a way to slip past the screensharer.
+            if (!ShowUnflagged) return false;
+            if (!ShowTemp && ShowTempToggle && DetailView.IsTempRow(o)) return false;
+        }
         // Records print every property, so searching their text searches every column.
-        return Search.Length == 0 || o.ToString()!.Contains(Search.Trim(), StringComparison.OrdinalIgnoreCase);
+        return _query.Matches(o.ToString()!);
     }
 
     void RefreshCurrent()
     {
-        foreach (var key in new[] { Page, Companion(Page) })
-            if (key != null && _views.TryGetValue(key, out var view)) view.Refresh();
+        foreach (var key in Companions(Page).Prepend(Page))
+            if (_views.TryGetValue(key, out var view)) view.Refresh();
+        // Counted over every table of the page, so the button accounts for all of what is on screen.
+        var rows = Companions(Page).Prepend(Page).Where(_views.ContainsKey).SelectMany(key => _views[key].SourceCollection.Cast<object>()).ToList();
+        UnflaggedRows = rows.Count(o => !IsFlagged(o));
+        TempRows = ShowTempToggle ? rows.Count(o => !IsFlagged(o) && DetailView.IsTempRow(o)) : 0;
+        OnPropertyChanged(nameof(UnflaggedRows));
+        OnPropertyChanged(nameof(TempRows));
         OnPropertyChanged(nameof(VisibleRows));
         OnPropertyChanged(nameof(HiddenRows));
-        OnPropertyChanged(nameof(HiddenText));
     }
 
     public int VisibleRows => _views.TryGetValue(Page, out var v) ? v.Count : 0;
-    /// <summary>Rows on this page that "Flagged only" hides (checked and fine).</summary>
-    public int HiddenRows => FlaggedOnly && _views.TryGetValue(Page, out var v) && v.SourceCollection is System.Collections.ICollection all ? all.Count - v.Count : 0;
-    public string HiddenText => HiddenRows > 0 ? $"{HiddenRows:N0} more checked and fine - turn off Flagged only to see them" : "";
+    /// <summary>Rows on this page with nothing flagged ("checked, fine"), and how many of those are about temporary files.</summary>
+    public int UnflaggedRows { get; private set; }
+    public int TempRows { get; private set; }
+    /// <summary>Rows of this page that are out of view right now.</summary>
+    public int HiddenRows => !ShowUnflagged ? UnflaggedRows : ShowTemp ? 0 : TempRows;
 
     // ---- summary ------------------------------------------------------------------------------------
     public string MachineLine => Report == null ? "" :
@@ -200,6 +222,9 @@ public sealed class TamperViewModel : ObservableObject
     public int ProblemServices => Report?.Services.Count(s => s.Status != CheckState.Ok) ?? 0;
     public int FlaggedEvidence => Report?.Artifacts.Count(a => a.Suspicious) ?? 0;
     public int ClockChangeCount => Report?.History.ClockChanges.Count ?? 0;
+    /// <summary>What on the Antivirus page deserves a look: protection that is off or was switched off, exclusions, and caught files that were kept.</summary>
+    public int AntivirusFlags => Report == null ? 0 :
+        Report.Antivirus.Count(a => a.State is CheckState.Bad or CheckState.Warning) + Report.Defender.Count(d => d.Suspicious) + Report.Detections.Count(d => d.Kept);
     /// <summary>The evidence services as they are now, for the Integrity &amp; services page.</summary>
     public IReadOnlyList<ServiceRow> ServicesList => Report?.Services ?? [];
     public IReadOnlyList<Finding> TopFindings => Report?.Findings.Take(8).ToList() ?? [];
@@ -249,7 +274,7 @@ public sealed class TamperViewModel : ObservableObject
     {
         Report = report;
         _page = "Overview";
-        _search = "";
+        _search = ""; _query = Core.Util.SearchQuery.Empty;
         BuildViews();
         CommandManager.InvalidateRequerySuggested();
     }
@@ -259,8 +284,8 @@ public sealed class TamperViewModel : ObservableObject
     {
         _selectedByPage.Clear();
         _selectedRow = null;
-        void Bind(string key, IEnumerable rows) =>
-            _views[key] = new ListCollectionView(rows.Cast<object>().ToList()) { Filter = Filter };
+        void Bind(string key, IEnumerable rows, bool filtered = true) =>
+            _views[key] = new ListCollectionView(rows.Cast<object>().ToList()) { Filter = filtered ? Filter : null };
         if (Report is not { } report)
         {
             foreach (var key in Pages.Keys) Bind(key, Array.Empty<object>());
@@ -279,6 +304,10 @@ public sealed class TamperViewModel : ObservableObject
         Bind("Clock", report.History.ClockChanges);
         Bind("Checks", report.History.Checks
             .OrderByDescending(c => c.State switch { CheckState.Bad => 3, CheckState.Warning => 2, CheckState.Unknown => 1, _ => 0 }).ToList());
+        Bind("Antivirus", report.Detections);
+        Bind("AvChanges", report.Defender);
+        // The state now is a handful of facts, all of them worth reading: "real-time protection: on" is an answer too.
+        Bind("AvNow", report.Antivirus, filtered: false);
         OnPropertyChanged(string.Empty);
     }
 
@@ -294,9 +323,8 @@ public sealed class TamperViewModel : ObservableObject
     bool _hidePrivate;
     public bool HidePrivate { get => _hidePrivate; set => Set(ref _hidePrivate, value); }
 
-    string DefaultFileName(string suffix, string ext) => HidePrivate || ShowingRedactedReport
-        ? $"HistoryParser-{Report!.History.StartedUtc.ToLocalTime():yyyyMMdd-HHmm}{suffix}-private-hidden.{ext}"
-        : $"HistoryParser-{Report!.History.Machine.ComputerName}-{Report.History.StartedUtc.ToLocalTime():yyyyMMdd-HHmm}{suffix}.{ext}";
+    string DefaultFileName(string suffix, string ext) =>
+        ReportFiles.DefaultName(Report!.History, HidePrivate || ShowingRedactedReport, suffix, ext);
 
     /// <summary>The main table of the current page, exactly as filtered on screen.</summary>
     void ExportCsv()
@@ -306,31 +334,16 @@ public sealed class TamperViewModel : ObservableObject
         if (rows.Count == 0) return;
         var clean = HidePrivate ? Redactor.CreateCleaner(Report.History) : null;
         var props = rows[0].GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.GetCustomAttribute<System.Text.Json.Serialization.JsonIgnoreAttribute>() == null)
             .Where(p => p.PropertyType == typeof(string) || p.PropertyType.IsValueType).ToList();
-        var sb = new StringBuilder();
-        sb.AppendLine(string.Join(",", props.Select(p => Csv(BypassExport.Header(p.Name)))));
-        foreach (var row in rows)
-        {
-            if (HidePrivate && row is ArgumentHit { Flagged: false }) continue;
-            sb.AppendLine(string.Join(",", props.Select(p =>
+        var kept = HidePrivate ? rows.Where(r => r is not ArgumentHit { Flagged: false }) : rows;
+        ExportDialog.SaveCsv(DefaultFileName("-" + Page.ToLowerInvariant(), "csv"), () => ReportFiles.Csv(
+            props.Select(p => BypassExport.Header(p.Name)),
+            kept.Select(row => props.Select(p =>
             {
                 var v = p.GetValue(row);
                 var text = v is DateTime t ? t.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") : v?.ToString() ?? "";
-                return Csv(clean == null ? text : clean(text));
-            })));
-        }
-        var dialog = new SaveFileDialog { FileName = DefaultFileName("-" + Page.ToLowerInvariant(), "csv"), Filter = "CSV (*.csv)|*.csv" };
-        if (dialog.ShowDialog() != true) return;
-        try { File.WriteAllText(dialog.FileName, sb.ToString(), new UTF8Encoding(true)); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            MessageBox.Show($"Could not save the CSV: {e.Message}", "History Parser", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-
-        static string Csv(string s)
-        {
-            if (s.Length > 0 && s[0] is '=' or '+' or '-' or '@') s = "'" + s;
-            return s.IndexOfAny([',', '"', '\n', '\r']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
-        }
+                return clean == null ? text : clean(text);
+            }))));
     }
 }

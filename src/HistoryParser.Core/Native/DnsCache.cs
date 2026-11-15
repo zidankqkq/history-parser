@@ -39,7 +39,7 @@ public static class DnsCache
         return types.OrderBy(t => t.Key, StringComparer.Ordinal).Select(t => new Entry(t.Key, string.Join(", ", t.Value))).ToList();
     }
 
-    static string TypeName(ushort type) => type switch
+    public static string TypeName(ushort type) => type switch
     {
         1 => "A", 2 => "NS", 5 => "CNAME", 6 => "SOA", 12 => "PTR", 15 => "MX", 16 => "TXT", 28 => "AAAA", 33 => "SRV", 65 => "HTTPS",
         var t => $"type {t}",

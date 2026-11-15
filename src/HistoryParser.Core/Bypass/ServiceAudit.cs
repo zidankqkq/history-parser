@@ -49,7 +49,11 @@ public static class ServiceAudit
             if (s.IsDisabled) { notes.Add("disabled"); state = w.Critical ? CheckState.Bad : CheckState.Warning; }
             else if (s.Exists && !s.IsRunning && s.State != "Unknown" && w.Critical) { notes.Add($"not running ({s.State})"); state = CheckState.Bad; }
 
-            if (s.ProcessStartUtc is { } started && started - ctx.BootUtc > TimeSpan.FromMinutes(10))
+            // Set to start when something asks for it, and it did. This tool's own shadow copy listing can be what asked.
+            bool onDemand = !w.Critical && s.IsRunning && WinApi.StartTypeName(s.StartType) == "Manual";
+            if (onDemand && s.ProcessStartUtc is { } asked && asked - ctx.BootUtc > TimeSpan.FromMinutes(10))
+                notes.Add($"started on demand {Util.When.L(asked)}");
+            else if (s.ProcessStartUtc is { } started && started - ctx.BootUtc > TimeSpan.FromMinutes(10))
             {
                 notes.Add($"restarted {Util.When.L(started)}");
                 if (state == CheckState.Ok) state = CheckState.Warning;

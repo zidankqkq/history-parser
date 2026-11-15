@@ -40,6 +40,7 @@ public sealed record DetailView(string Title, string Subtitle, IReadOnlyList<Det
         ArtifactChange a => a.Path,
         ArgumentHit a => a.CommandLine,
         DriverRow d => d.Path,
+        DefenderDetection d => d.Path,
         TaskRow t => t.Command,
         RouteCheck c => c.Path,
         _ => null,
@@ -80,9 +81,30 @@ public sealed record DetailView(string Title, string Subtitle, IReadOnlyList<Det
             [new("Time", T(s.TimeUtc)), new("Version", s.Version), new("Publisher", s.Publisher), new("Note", s.Note.Length > 0 ? s.Note : "—")],
             [], "", []),
 
-        DefenderChange d => new(d.Setting, d.Suspicious ? "Flagged" : "Defender change",
-            [new("Time", T(d.TimeUtc)), new("New value", d.NewValue, true), new("Old value", d.OldValue, true)],
-            [], "", []),
+        DefenderChange d => new(d.Setting, d.Suspicious ? "Flagged" : "Change to the antivirus",
+            new DetailField[] { new("Time", T(d.TimeUtc)), new("What it means", d.Detail), new("New value", d.NewValue, true), new("Old value", d.OldValue, true) }
+                .Where(f => f.Value.Length > 0).ToList(),
+            [], "Other changes within an hour",
+            r.Defender.Where(o => o != d && o.TimeUtc is { } t && d.TimeUtc is { } at && (t - at).Duration() < TimeSpan.FromHours(1))
+                .Select(o => new DetailRelated(o.TimeUtc, o.Setting, o.Detail)).ToList()),
+
+        DefenderDetection d => new(d.Threat, d.Kept ? "Caught, and kept" : d.Action,
+            new DetailField[]
+            {
+                new("Time", T(d.TimeUtc)), new("What was done", d.Action), new("Notes", d.Note),
+                new(d.Paths.Count > 1 ? "Files" : "File", string.Join(Environment.NewLine, d.Paths), true), new("Command that was caught", d.Command, true),
+                new("Touched by", d.Process, true), new("Account", d.User), new("Found by", d.FoundBy),
+                new("Defender's grading", string.Join(" · ", new[] { d.Level, d.Category }.Where(s => s.Length > 0))),
+            }.Where(f => f.Value.Length > 0).ToList(),
+            d.Path.Length > 0 ? FindingsAbout(d.Path, r) : [],
+            // What else was caught in the same file, and what changed in Defender around that time: allowing a threat or
+            // switching protection off right after a detection is the story.
+            "Around the same time",
+            r.Detections.Where(o => o != d && d.Path.Length > 0 && o.Path.Equals(d.Path, StringComparison.OrdinalIgnoreCase))
+                .Select(o => new DetailRelated(o.TimeUtc, $"Also caught as {o.Threat}", o.Action))
+                .Concat(r.Defender.Where(c => c.TimeUtc is { } t && d.TimeUtc is { } at && (t - at).Duration() < TimeSpan.FromMinutes(30))
+                    .Select(c => new DetailRelated(c.TimeUtc, c.Setting, c.Detail)))
+                .OrderByDescending(x => x.TimeUtc ?? DateTime.MinValue).ToList()),
 
         RouteCheck c => new(c.Item, c.Area,
             [new("Result", c.Value, true), new("Time", T(c.TimeUtc)), new("Detail", c.Detail.Length > 0 ? c.Detail : "—"), new("Path", c.Path.Length > 0 ? c.Path : "—", true)],

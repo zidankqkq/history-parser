@@ -271,17 +271,54 @@ public static class ArtifactAudit
             }
         }
 
-        // 2. Programs deleted right before the scan.
-        foreach (var e in usn.Where(e => e.Kind == EvidenceKind.Deleted && ctx.NowUtc - e.TimeUtc!.Value < TimeSpan.FromHours(1) &&
-                                         ctx.NowUtc >= e.TimeUtc!.Value && !Util.FileTypes.IsWindowsFile(e.Path) &&
-                                         Util.FileTypes.FromPath(e.Path) is FileType.Exe or FileType.Jar or FileType.Dll &&
-                                         !Util.FileTypes.IsInstallerTemp(e.Path)))
+        // 2. Programs deleted right before the scan - and while it was running. A deleted file cannot be verified, so none is
+        // skipped for where it was or what it was called.
+        var ran = ctx.History.Files.Where(f => f.WasExecutedDirectly || f.WasLoaded).Select(f => f.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ours = ctx.History.Files.Where(f => f.IsThisTool).Select(f => f.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var windowsDeletes = new List<Evidence>();
+        DateTime opened = ctx.OpenedUtc < ctx.NowUtc ? ctx.OpenedUtc : ctx.NowUtc;
+        // A record dated later than this moment was written under another clock (the clock was moved back since). It did not
+        // happen "after this program was opened", so it is left to the clock checks.
+        DateTime latest = DateTime.UtcNow.AddMinutes(2);
+        foreach (var e in usn.Where(e => e.Kind == EvidenceKind.Deleted && ctx.NowUtc - e.TimeUtc!.Value < TimeSpan.FromHours(1) && e.TimeUtc.Value <= latest &&
+                                         Util.FileTypes.FromPath(e.Path) is FileType.Exe or FileType.Jar or FileType.Dll or FileType.Script &&
+                                         !ours.Contains(e.Path)))
         {
+            // Deleted after this program was opened: something reacted to it (cheats and loaders that watch for screenshare
+            // tools delete themselves the moment one starts), or an update or cleanup happened to run just then.
+            if (e.TimeUtc!.Value > opened)
+            {
+                bool replaced = Rewritten(e);
+                bool used = ran.Contains(e.Path);
+                var severity = replaced ? Severity.Low : used && !LooksLikeUpdate(e.Path) ? Severity.High : Severity.Medium;
+                ctx.Flag(severity, FindingCategory.Deletion, "Program deleted after this program was opened",
+                    $"{e.Path} was deleted at {Util.When.L(e.TimeUtc)}, {Analysis.Correlator.FormatGap(e.TimeUtc!.Value - opened)} after this program started " +
+                    $"({Util.When.L(opened)})." + (used ? " The records show it ran or was loaded on this PC." : "") +
+                    (replaced ? " A file with the same name was written again straight away, which is what an update looks like."
+                              : " Cheats and loaders that watch for screenshare tools remove themselves at this moment; an app updating itself can look the same."),
+                    e.Path, e.TimeUtc);
+                continue;
+            }
+            // Windows deletes its own files in bulk (updates, component cleanup, Defender definitions). They cannot be told
+            // apart one by one once gone, so they are reported together below instead of one finding each.
+            if (Analysis.RoutineFiles.InWindowsFolder(e.Path) && !ran.Contains(e.Path)) { windowsDeletes.Add(e); continue; }
+            if (Util.FileTypes.IsInstallerTemp(e.Path) && !ran.Contains(e.Path)) continue;
+            if (Util.FileTypes.FromPath(e.Path) == FileType.Script && !ran.Contains(e.Path)) continue; // scripts come and go; only one that ran matters
             bool update = Rewritten(e) || LooksLikeUpdate(e.Path);
             ctx.Flag(update ? Severity.Low : Severity.Medium, FindingCategory.Deletion, "Program deleted right before the scan",
                 $"{e.Path} was deleted at {Util.When.L(e.TimeUtc)}, {(ctx.NowUtc - e.TimeUtc!.Value).TotalMinutes:0} min before the scan." +
                 (update ? " It sits in an app's update or version folder (or was replaced straight away), which is what an auto-update looks like." : ""),
                 e.Path, e.TimeUtc);
+        }
+        if (windowsDeletes.Count > 0)
+        {
+            var newest = windowsDeletes.MaxBy(d => d.TimeUtc)!;
+            ctx.Flag(Severity.Low, FindingCategory.Deletion,
+                windowsDeletes.Count == 1 ? "A program file was deleted from the Windows folder in the hour before the scan" : $"{windowsDeletes.Count} program files were deleted from the Windows folder in the hour before the scan",
+                $"None of them is recorded as having run. Windows removes its own files in batches (updates, cleanup), and a deleted file cannot be " +
+                $"verified, so they are listed here rather than judged: {string.Join(", ", windowsDeletes.OrderByDescending(d => d.TimeUtc).Take(12).Select(d => d.Path))}" +
+                (windowsDeletes.Count > 12 ? $" and {windowsDeletes.Count - 12} more (see the timeline)." : "."),
+                newest.Path, newest.TimeUtc);
         }
 
         // 3. Jars removed from a Minecraft mods folder. Launchers update mods by deleting the old jar and

@@ -1,12 +1,21 @@
 <Application x:Class="HistoryParser.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sys="clr-namespace:System;assembly=mscorlib"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Themes/Theme.xaml" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- History Parser's tables get more room than the shared theme gives: taller rows, wider cells, larger type.
+                 Its columns are sized for that. The other programs of the suite keep the shared sizes, which theirs are sized for. -->
+            <sys:Double x:Key="TableRowHeight">38</sys:Double>
+            <sys:Double x:Key="TableFontSize">13</sys:Double>
+            <sys:Double x:Key="TableMonoSize">12</sys:Double>
+            <Thickness x:Key="TableCellPadding">14,0</Thickness>
+            <Thickness x:Key="TableHeaderPadding">14,12</Thickness>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

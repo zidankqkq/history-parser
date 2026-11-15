@@ -64,7 +64,7 @@ public static class HidingAudit
     /// FileInfo is the file-system filter that tells SysMain which files a program opens; Prefetch is built from it. Unloading it
     /// (fltmc unload fileinfo) or disabling it stops Prefetch recording while SysMain still looks fine.
     /// </summary>
-    static int FileInfoFilter(BypassContext ctx)
+    internal static int FileInfoFilter(BypassContext ctx)
     {
         var s = WinApi.QueryService("FileInfo");
         if (!s.Exists)
@@ -258,7 +258,7 @@ public static class HidingAudit
     }
 
     /// <summary>Policies that stop Windows from keeping recent-file lists (the Explorer and dialog history a screenshare reads).</summary>
-    static int RecentLists(BypassContext ctx)
+    internal static int RecentLists(BypassContext ctx)
     {
         int items = 0;
         foreach (var (root, prefix, user) in UserHives())

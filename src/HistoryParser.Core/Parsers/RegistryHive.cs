@@ -22,6 +22,9 @@ public sealed class RegistryHive
 
     public Key Root { get; }
 
+    /// <summary>Subkey links seen so far that led to something other than a key, so a damaged hive can say so instead of looking emptier than it is.</summary>
+    public int BrokenLinks { get; private set; }
+
     public sealed record Key(RegistryHive Hive, int Offset, string Name, DateTime? LastWriteUtc, int SubkeyList, int SubkeyCount, int ValueList, int ValueCount)
     {
         public IEnumerable<Key> Subkeys() => Hive.Subkeys(this);
@@ -58,7 +61,11 @@ public sealed class RegistryHive
         if (key.SubkeyCount <= 0) yield break;
         var seen = new HashSet<int>();
         foreach (var offset in ListOffsets(key.SubkeyList, 0))
-            if (seen.Add(offset) && ReadKey(offset) is { } k) yield return k;
+        {
+            if (!seen.Add(offset)) continue;
+            if (ReadKey(offset) is { } k) yield return k;
+            else BrokenLinks++;
+        }
     }
 
     /// <summary>Key offsets from an lf / lh / li / ri subkey list.</summary>
@@ -106,8 +113,17 @@ public sealed class RegistryHive
             else
             {
                 int d = Cell(dataOffset);
-                if (d < 0 || length > 16344 || d + length > _data.Length) continue; // big-data ("db") values are not needed here
-                bytes = _data.AsSpan(d, length).ToArray();
+                if (d < 0) continue;
+                if (length > 16344 && d + 8 <= _data.Length && _data[d] == 'd' && _data[d + 1] == 'b')
+                {
+                    if (ReadBigData(d, length) is not { } big) continue;
+                    bytes = big;
+                }
+                else
+                {
+                    if (d + length > _data.Length) continue;
+                    bytes = _data.AsSpan(d, length).ToArray();
+                }
             }
             object? value = type switch
             {
@@ -119,5 +135,25 @@ public sealed class RegistryHive
             result[name] = value;
         }
         return result;
+    }
+
+    /// <summary>A value over 16344 bytes: "db" header, segment count +2, segment list cell +4; each segment holds at most 16344 bytes.</summary>
+    byte[]? ReadBigData(int db, int length)
+    {
+        int segments = BitConverter.ToUInt16(_data, db + 2);
+        int list = Cell(BitConverter.ToInt32(_data, db + 4));
+        if (list < 0 || list + segments * 4 > _data.Length) return null;
+        var bytes = new byte[length];
+        int done = 0;
+        for (int i = 0; i < segments && done < length; i++)
+        {
+            int segment = Cell(BitConverter.ToInt32(_data, list + i * 4));
+            if (segment < 0) return null;
+            int take = Math.Min(16344, length - done);
+            if (segment + take > _data.Length) return null;
+            _data.AsSpan(segment, take).CopyTo(bytes.AsSpan(done));
+            done += take;
+        }
+        return done == length ? bytes : null;
     }
 }
