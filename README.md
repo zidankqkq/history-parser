@@ -15,22 +15,3 @@ gh attestation verify HistoryParser.exe --repo zidankqkq/history-parser
 ```
 
 It is not code-signed, so Windows SmartScreen shows a warning on first run (More info -> Run anyway).
-
-## Build it yourself
-
-Needs the .NET 9 SDK on Windows.
-
-```
-dotnet test tests/HistoryParser.Core.Tests -c Release
-./publish.ps1 -Version 1.0.0
-```
-
-## Releasing
-
-Push a tag like `v1.0.0`; GitHub Actions builds HistoryParser.exe, writes its SHA-256, signs the provenance and creates the release.
-
-## Layout
-
-- `src/HistoryParser.App` - the program.
-- `src/HistoryParser.Core`, `src/RatChecker.Core` - the shared forensics libraries.
-- `tests/HistoryParser.Core.Tests` - the test suite.
