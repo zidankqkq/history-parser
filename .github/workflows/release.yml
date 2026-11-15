@@ -1,5 +1,5 @@
 # Builds HistoryParser.exe on GitHub's servers and attaches it to a release. Push a tag like v1.0.0 to run it.
-# The exe comes with a signed build-provenance attestation:  gh attestation verify HistoryParser.exe --repo <user>/history-parser
+# The exe comes with a signed build-provenance attestation:  gh attestation verify HistoryParser.exe --repo zidankqkq/history-parser
 name: release
 
 on:

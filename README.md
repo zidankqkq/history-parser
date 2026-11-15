@@ -11,7 +11,7 @@ Get `HistoryParser.exe` from the [latest release](../../releases/latest). Nothin
 The exe is built on GitHub's servers from this source and carries a signed build-provenance attestation, so you can verify your download matches the code:
 
 ```
-gh attestation verify HistoryParser.exe --repo <your-user>/history-parser
+gh attestation verify HistoryParser.exe --repo zidankqkq/history-parser
 ```
 
 It is not code-signed, so Windows SmartScreen shows a warning on first run (More info -> Run anyway).
