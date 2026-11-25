@@ -2316,10 +2316,10 @@
                                         <TextBlock Text="Where the evidence comes from" Style="{StaticResource H2}" />
                                         <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0" LineHeight="20" Foreground="{StaticResource Text}" TextWrapping="Wrap">
                                             <Run FontWeight="SemiBold" Text="Prefetch" /> — last 8 run times and run count of each program, and the DLLs and jars it loaded.<LineBreak />
-                                            <Run FontWeight="SemiBold" Text="BAM / PCA / UserAssist" /> — when programs ran, per user, and launches through Explorer.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="BAM / PCA / UserAssist" /> — when programs ran, per user, and launches through Explorer; BAM entries deleted since are read back from the registry file.<LineBreak />
                                             <Run FontWeight="SemiBold" Text="Amcache / ShimCache" /> — programs Windows has inventoried, with SHA-1 and dates; survives Prefetch being cleared.<LineBreak />
                                             <Run FontWeight="SemiBold" Text="USN journal / Recycle Bin" /> — file creations, deletions and renames; also reveals clock rollbacks.<LineBreak />
-                                            <Run FontWeight="SemiBold" Text="Recent shortcuts / taskbar records" /> — files opened from Explorer and programs used from the taskbar.<LineBreak />
+                                            <Run FontWeight="SemiBold" Text="Recent shortcuts / file dialogs / taskbar records" /> — files opened from Explorer, files picked in Open and Save dialogs, and programs used from the taskbar.<LineBreak />
                                             <Run FontWeight="SemiBold" Text="Crash reports" /> — programs that crashed (proof they ran) and the modules they had loaded.<LineBreak />
                                             <Run FontWeight="SemiBold" Text="Privacy access" /> — every desktop program that used the camera, microphone, location or screen capture, with the start and stop time of its last use, even after it was deleted.<LineBreak />
                                             <Run FontWeight="SemiBold" Text="Event logs / Memory" /> — clock changes, cleared logs, services, and program paths still held in memory.

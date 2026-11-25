@@ -51,6 +51,9 @@ public sealed class PathNormalizer
         // Anything with a scheme ("https:", "net:", "service:") is not a file path to rewrite.
         if (HasScheme(p)) return p;
         p = p.Replace('/', '\\');
+        // Already the form a file on a volume with no drive letter is given (see ForThisMachine): left as it is, so
+        // normalizing twice changes nothing.
+        if (Volumes.IsVolumePath(p)) return p;
         // Another spelling of a device path, including a shadow copy's.
         if (p.StartsWith(@"\\?\GLOBALROOT\", StringComparison.OrdinalIgnoreCase) || p.StartsWith(@"\\.\GLOBALROOT\", StringComparison.OrdinalIgnoreCase)) p = p[14..];
 
@@ -145,6 +148,18 @@ public sealed class PathNormalizer
             }
             if (NativeMethods.GetVolumeInformation(d.Name, null, 0, out uint serial, out _, out _, null, 0))
                 serials[serial] = letter;
+        }
+
+        // Volumes with no drive letter. One mounted as a folder is that folder. One mounted nowhere is hidden from
+        // Explorer but still there, and still reachable by its permanent name, so a program recorded on it gets a path
+        // that can be opened, hashed and verified like any other instead of a device name nothing can do anything with.
+        foreach (var v in Volumes.List())
+        {
+            if (devices.ContainsKey(v.Device)) continue;
+            string where = v.MountPaths.FirstOrDefault(m => m.Length > 3)?.TrimEnd('\\') ?? v.GuidPath;
+            devices[v.Device] = where;
+            if (NativeMethods.GetVolumeInformation(v.GuidPath + "\\", null, 0, out uint serial, out _, out _, null, 0) && serial != 0)
+                serials.TryAdd(serial, where);
         }
 
         var known = new Dictionary<Guid, string>();

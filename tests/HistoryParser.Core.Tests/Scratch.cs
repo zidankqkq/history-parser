@@ -17,4 +17,8 @@ static class Scratch
         System.IO.File.WriteAllBytes(path, contents);
         return path;
     }
+
+    /// <summary>A path in its own subfolder for a file the test (or Windows) writes itself.</summary>
+    public static string PathFor(string folder, string name) =>
+        Path.Combine(Directory.CreateDirectory(Path.Combine(Root, folder)).FullName, name);
 }

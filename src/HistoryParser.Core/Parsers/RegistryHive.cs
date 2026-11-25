@@ -137,6 +137,82 @@ public sealed class RegistryHive
         return result;
     }
 
+    /// <summary>A value found in the hive's free space. <paramref name="Offset"/> is where in the file it was read.</summary>
+    public sealed record FreedValue(int Offset, string Name, int Type, byte[] Data);
+
+    /// <summary>How many free cells <see cref="FreedValues"/> walked and how many bytes they held, so a read can say what it covered.</summary>
+    public (int Cells, long Bytes) FreeSpace { get; private set; }
+
+    /// <summary>
+    /// Values still readable in freed cells. Deleting a value marks its cell free and leaves the bytes until the cell is
+    /// used again, so a deleted value can often still be read. Free neighbours are merged into one cell, so a deleted value
+    /// can sit anywhere inside a free cell: every 8-byte position is tried, because cells always start on one.
+    /// <para>
+    /// What comes back is only what looks like a value: a name of printable characters and data that lies inside the file.
+    /// The data cell may have been reused since, so the caller decides whether the data still makes sense.
+    /// </para>
+    /// </summary>
+    public IEnumerable<FreedValue> FreedValues(Func<string, bool>? wanted = null)
+    {
+        int cells = 0;
+        long bytes = 0;
+        int end = (int)Math.Min(_data.Length, (long)BinsStart + Math.Max(0, BitConverter.ToInt32(_data, 0x28)));
+        if (end <= BinsStart) end = _data.Length;
+        int bin = BinsStart;
+        while (bin + 0x20 <= end && _data[bin] == 'h' && _data[bin + 1] == 'b' && _data[bin + 2] == 'i' && _data[bin + 3] == 'n')
+        {
+            int binSize = BitConverter.ToInt32(_data, bin + 8);
+            if (binSize < 0x1000 || (binSize & 0xFFF) != 0 || (long)bin + binSize > _data.Length) break;
+            int binEnd = bin + binSize;
+            int cell = bin + 0x20;
+            while (cell + 8 <= binEnd)
+            {
+                int size = BitConverter.ToInt32(_data, cell);
+                long length = Math.Abs((long)size);
+                // A size that cannot be right: the rest of this bin cannot be walked, the next one can.
+                if (length < 8 || (length & 7) != 0 || cell + length > binEnd) break;
+                if (size > 0)
+                {
+                    cells++;
+                    bytes += length;
+                    int cellEnd = cell + (int)length;
+                    for (int at = cell; at + 4 + 0x18 <= cellEnd; at += 8)
+                        if (_data[at + 4] == 'v' && _data[at + 5] == 'k' && ReadFreedValue(at + 4, cellEnd, wanted) is { } value)
+                            yield return value;
+                }
+                cell += (int)length;
+            }
+            bin = binEnd;
+        }
+        FreeSpace = (cells, bytes);
+    }
+
+    FreedValue? ReadFreedValue(int p, int cellEnd, Func<string, bool>? wanted)
+    {
+        int nameLength = BitConverter.ToUInt16(_data, p + 2);
+        if (nameLength == 0 || nameLength > 1024 || p + 0x14 + nameLength > cellEnd) return null;
+        uint size = BitConverter.ToUInt32(_data, p + 4);
+        int dataOffset = BitConverter.ToInt32(_data, p + 8);
+        int type = BitConverter.ToInt32(_data, p + 0x0C);
+        bool asciiName = (BitConverter.ToUInt16(_data, p + 0x10) & 1) != 0;
+        if (!asciiName && (nameLength & 1) != 0) return null;
+        string name = asciiName ? Encoding.Latin1.GetString(_data, p + 0x14, nameLength) : Encoding.Unicode.GetString(_data, p + 0x14, nameLength);
+        foreach (char c in name) if (c < 0x20 || c == 0xFFFF) return null;
+        if (wanted != null && !wanted(name)) return null;
+
+        int length = (int)(size & 0x7FFFFFFF);
+        byte[] data;
+        if ((size & 0x80000000) != 0) data = BitConverter.GetBytes(dataOffset)[..Math.Min(length, 4)];
+        else
+        {
+            int d = Cell(dataOffset);
+            // Values this large are stored in pieces; a deleted one is not worth piecing together from freed cells.
+            if (d < 0 || length > 16344 || (long)d + length > _data.Length) return null;
+            data = _data.AsSpan(d, length).ToArray();
+        }
+        return new FreedValue(p - 4, name, type, data);
+    }
+
     /// <summary>A value over 16344 bytes: "db" header, segment count +2, segment list cell +4; each segment holds at most 16344 bytes.</summary>
     byte[]? ReadBigData(int db, int length)
     {

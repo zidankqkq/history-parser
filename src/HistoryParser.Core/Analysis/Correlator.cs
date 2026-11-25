@@ -22,6 +22,7 @@ public sealed class Correlator
     readonly Func<string, bool> _driveExists;
     readonly Func<string, DateTime?> _lastWrite;
     readonly Func<string, string?> _routine;
+    readonly DateTime? _bootUtc;
 
     /// <param name="routine">
     /// Why a file is routine, or null (see <see cref="RoutineFiles"/>). By default only what the scan has already verified
@@ -29,8 +30,10 @@ public sealed class Correlator
     /// </param>
     public Correlator(DateTime nowUtc, TimeSpan tolerance, IReadOnlyList<ClockChange> clockChanges,
         IEnumerable<string> runningProcessNames, Func<string, bool>? fileExists = null,
-        Func<string, bool>? driveExists = null, Func<string, DateTime?>? lastWriteUtc = null, Func<string, string?>? routine = null)
+        Func<string, bool>? driveExists = null, Func<string, DateTime?>? lastWriteUtc = null, Func<string, string?>? routine = null,
+        DateTime? bootUtc = null)
     {
+        _bootUtc = bootUtc;
         _now = nowUtc;
         _tol = tolerance;
         _clockChanges = clockChanges;
@@ -107,10 +110,12 @@ public sealed class Correlator
     void Analyze(FileRecord r)
     {
         ResolveStatus(r);
+        CheckUnletteredVolume(r);
         CheckFutureTimes(r);
         CheckDeletionOrder(r);
         CheckReplacement(r);
         CheckBamAgainstPrefetch(r);
+        CheckDeletedBam(r);
         CheckLaunchesAgainstPrefetch(r);
         CheckClockChanges(r);
         CheckShimCacheModified(r);
@@ -120,7 +125,10 @@ public sealed class Correlator
 
     void ResolveStatus(FileRecord r)
     {
-        bool rooted = r.Path.Length >= 3 && r.Path[1] == ':' && r.Path[2] == '\\';
+        // A volume with no drive letter is written by its permanent name (see PathNormalizer.ForThisMachine): as much a
+        // full path as one with a letter.
+        bool unlettered = Volumes.IsVolumePath(r.Path);
+        bool rooted = unlettered || (r.Path.Length >= 3 && r.Path[1] == ':' && r.Path[2] == '\\');
         var deleted = r.Evidence.Where(e => e.Kind == EvidenceKind.Deleted && e.TimeUtc.HasValue).MaxBy(e => e.TimeUtc);
         var recycled = r.Evidence.Where(e => e.Kind == EvidenceKind.Recycled).MaxBy(e => e.TimeUtc);
         var renamedAway = r.Evidence.Where(e => e.Kind == EvidenceKind.Renamed && e.Detail.StartsWith("Renamed to"))
@@ -129,7 +137,7 @@ public sealed class Correlator
         if (rooted && _fileExists(r.Path))
         {
             r.Status = FileStatus.Exists;
-            r.StatusDetail = "File is present";
+            r.StatusDetail = unlettered ? "File is present, on a volume that has no drive letter" : "File is present";
         }
         else if (recycled != null)
         {
@@ -152,18 +160,56 @@ public sealed class Correlator
         else if (rooted && !_driveExists(r.Path))
         {
             r.Status = FileStatus.DriveNotConnected;
-            r.StatusDetail = $"Drive {r.Path[..2]} is not connected (USB stick or unmounted volume?)";
+            r.StatusDetail = unlettered ? "Its volume, which had no drive letter, cannot be opened now"
+                : $"Drive {r.Path[..2]} is not connected (USB stick or unmounted volume?)";
         }
         else if (rooted)
         {
             r.Status = FileStatus.Missing;
-            r.StatusDetail = "Not present, and no deletion record (journal rolled over, or removed another way)";
+            r.StatusDetail = unlettered ? "Not present on its volume, which has no drive letter"
+                : "Not present, and no deletion record (journal rolled over, or removed another way)";
+        }
+        else if (DeviceVolume(r.Path) is { } device)
+        {
+            // Every volume present now was given a path, so this one is not among them. Windows numbers volumes as they
+            // arrive, so a record from an earlier boot can also carry a number that belonged to another volume then.
+            r.Status = FileStatus.DriveNotConnected;
+            r.StatusDetail = $"No volume is {device} now: its drive is not connected (a USB stick, a detached virtual disk), or Windows numbered the volumes differently when it last started";
         }
         else
         {
             r.Status = FileStatus.Unknown;
             r.StatusDetail = "Full path unknown";
         }
+    }
+
+    /// <summary>"\Device\HarddiskVolume7" from a path the scan could not turn into a drive, or null for any other path.</summary>
+    internal static string? DeviceVolume(string path)
+    {
+        const string prefix = @"\Device\HarddiskVolume";
+        if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+        int end = prefix.Length;
+        while (end < path.Length && char.IsAsciiDigit(path[end])) end++;
+        return end > prefix.Length && end < path.Length && path[end] == '\\' ? path[..end] : null;
+    }
+
+    /// <summary>
+    /// A program on a volume that is connected but has no drive letter and is mounted in no folder. Explorer does not show
+    /// such a volume, which is why programs are kept on one. Reported when the file is there now, or when it ran since the
+    /// last boot (volume numbers hold for a boot; an older record whose file is not there may be about another volume).
+    /// </summary>
+    void CheckUnletteredVolume(FileRecord r)
+    {
+        if (!Volumes.IsVolumePath(r.Path) || !(r.WasExecutedDirectly || r.WasLoaded)) return;
+        if (r.Type is not (FileType.Exe or FileType.Dll or FileType.Jar or FileType.Script)) return;
+        bool present = r.Status == FileStatus.Exists;
+        bool thisBoot = _bootUtc is { } boot && r.LastExecutionUtc >= boot;
+        if (!present && !thisBoot) return;
+        Add(r, Severity.High, FindingCategory.AntiForensics, "Ran from a volume with no drive letter",
+            $"Windows recorded this program {(r.WasExecutedDirectly ? "running" : "being loaded")} at {Util.When.L(r.LastExecutionUtc)} from a volume that is " +
+            "connected but has no drive letter and is mounted in no folder, so Explorer does not show it. " +
+            (present ? "The file is there now." : "The file is not there now.") +
+            (thisBoot ? " That was since the last boot." : ""), r.LastExecutionUtc);
     }
 
     void CheckFutureTimes(FileRecord r)
@@ -258,6 +304,24 @@ public sealed class Correlator
             "is not running now. Either one of the two was altered or the clock was moved, or that run never ended cleanly " +
             "(crash, power loss) so Windows never updated BAM.",
             p);
+    }
+
+    /// <summary>
+    /// A BAM entry recovered from the registry file after it was deleted (see <see cref="Collectors.BamRecovery"/>). Only
+    /// entries too young for Windows' own clean-up are recovered at all. One from a run since the last boot is the plain
+    /// case: the program ran in this session and its record was removed afterwards.
+    /// </summary>
+    void CheckDeletedBam(FileRecord r)
+    {
+        var gone = r.Evidence.Where(e => Collectors.BamRecovery.IsDeleted(e) && e.TimeUtc.HasValue).MaxBy(e => e.TimeUtc);
+        if (gone?.TimeUtc is not { } ran) return;
+        bool thisBoot = _bootUtc is { } boot && ran >= boot;
+        Add(r, thisBoot ? Severity.High : Severity.Medium, FindingCategory.AntiForensics, "BAM entry deleted",
+            $"BAM recorded this program's last run as {Util.When.L(ran)}, and that entry is no longer in the registry: it was " +
+            $"{Collectors.BamRecovery.How(gone)}. Windows removes BAM entries itself only when it starts, for programs not run for " +
+            $"{Collectors.BamRecovery.CleanUpAge.TotalDays:0} days or whose file is gone. " +
+            (thisBoot ? "This run was since the last boot, so Windows has not started since to remove anything."
+                : $"This entry was {FormatGap(_now - ran)} old at the scan and the file was still on disk."), ran);
     }
 
     /// <summary>

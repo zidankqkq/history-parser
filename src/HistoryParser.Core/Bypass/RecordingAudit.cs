@@ -37,10 +37,36 @@ public static class RecordingAudit
                Safe("Prefetch keeps up with running programs", () => PrefetchKeepsUp(ctx)) +
                Safe("Logging switches", () => BlockingAudit.LoggingSwitches(ctx)) +
                Safe("Event log sessions", () => EventLogSessions(ctx)) +
+               Safe("Setup-environment switch", () => SetupEnvironmentSwitch(ctx)) +
                Safe("Recent-file lists", () => HidingAudit.RecentLists(ctx)) +
                Safe("Program launch tracking", () => LaunchTracking(ctx)) +
                Safe("This program", () => OwnProcess(ctx));
     }
+
+    // ---- the setup-environment switch ----------------------------------------------------------------
+
+    /// <summary>
+    /// Control\MiniNT is how Windows knows it is running as its own setup and recovery environment (Windows PE), where
+    /// event logs are not kept. An installed Windows never has the key. Creating it there is a published way to stop
+    /// events being written without stopping the event log service or switching any log off, so nothing else here shows it.
+    /// </summary>
+    internal static int SetupEnvironmentSwitch(BypassContext ctx)
+    {
+        using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\MiniNT");
+        var (state, detail, finding) = JudgeSetupSwitch(key != null, key != null ? WinApi.GetKeyLastWriteUtc(key) : null);
+        ctx.Check(Area, "Setup-environment switch (MiniNT)", state, detail);
+        if (finding is { } f) ctx.Flag(Severity.High, FindingCategory.LogTampering, f.Title, f.Detail, timeUtc: f.TimeUtc);
+        return 1;
+    }
+
+    internal static (CheckState State, string Detail, (string Title, string Detail, DateTime? TimeUtc)? Finding) JudgeSetupSwitch(bool present, DateTime? writtenUtc) =>
+        !present
+            ? (CheckState.Ok, "Not set.", null)
+            : (CheckState.Bad, $@"Control\MiniNT exists (written {Util.When.L(writtenUtc)}).",
+                ("Windows is set to act as its setup environment (MiniNT)",
+                 $@"The registry key Control\MiniNT exists, written {Util.When.L(writtenUtc)}. Windows has that key only in its setup and recovery " +
+                 "environment, where no event logs are kept; an installed Windows never creates it. With it set, events stop being written " +
+                 "while the event log service runs and every log reads as enabled.", writtenUtc));
 
     // ---- Prefetch against the process list -----------------------------------------------------------
 

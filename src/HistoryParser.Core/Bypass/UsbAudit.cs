@@ -72,8 +72,53 @@ public static class UsbAudit
                     $"\"{d.Name}\" (serial {d.Serial}) was last connected {Util.When.L(arrived)}{(d.ConnectedNow ? " and is still plugged in" : "")}.", timeUtc: arrived);
         }
 
-        int events = ConnectionHistory(ctx);
+        int events = ConnectionHistory(ctx) + VirtualDisks(ctx);
         return devices.Count + events;
+    }
+
+    /// <summary>
+    /// Virtual disks: a file (.vhd, .vhdx) attached as a disk, and removed again. Used the way a USB stick is - programs
+    /// run from it, then it is detached - so it is listed with them. VHDMP-Operational 1 = came online as a disk, 2 = removed.
+    /// </summary>
+    static int VirtualDisks(BypassContext ctx)
+    {
+        var events = new List<UsbEvent>();
+        foreach (var r in Events.Read("Microsoft-Windows-VHDMP-Operational", "*[System[(EventID=1 or EventID=2)]]", 3000))
+            if (ParseVirtualDiskEvent(r.Id, Events.Data(r)) is { } e) events.Add(e with { TimeUtc = Events.Utc(r) });
+        foreach (var e in events) ctx.UsbEvents.Add(e);
+
+        // The newest event of each file says how it stands now.
+        foreach (var last in events.Where(e => e.TimeUtc.HasValue).GroupBy(e => e.Serial, StringComparer.OrdinalIgnoreCase).Select(g => g.MaxBy(e => e.TimeUtc)!))
+        {
+            if (last.Action != "Removed" || last.TimeUtc is not { } removed || ctx.NowUtc - removed >= TimeSpan.FromHours(1) || removed > ctx.NowUtc) continue;
+            bool gone;
+            try { gone = !File.Exists(last.Serial); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { gone = false; }
+            ctx.Flag(Severity.Medium, FindingCategory.Usb, "Virtual disk removed just before the scan",
+                $"{last.Serial} was attached as a disk and removed again at {Util.When.L(removed)}, {(ctx.NowUtc - removed).TotalMinutes:0} min before the scan" +
+                (gone ? ", and that file is not there now. " : ". ") + "Programs can be run from a virtual disk and the disk removed before a screenshare.",
+                last.Serial, removed);
+        }
+        return events.Count;
+    }
+
+    /// <summary>Turns a VHDMP 1 / 2 event into a row. The file's full path goes where a USB device's serial number goes: it is what identifies it.</summary>
+    public static UsbEvent? ParseVirtualDiskEvent(int id, IReadOnlyDictionary<string, string> data)
+    {
+        if (id is not (1 or 2)) return null;
+        string file = (data.GetValueOrDefault("VhdFileName") ?? "").Trim();
+        if (file.StartsWith(@"\\?\", StringComparison.Ordinal) && !file.StartsWith(@"\\?\Volume{", StringComparison.OrdinalIgnoreCase)) file = file[4..];
+        if (file.Length == 0) return null;
+        string name;
+        try { name = Path.GetFileName(file); }
+        catch (ArgumentException) { name = file; }
+        return new UsbEvent
+        {
+            Device = "Virtual disk " + (name.Length > 0 ? name : file),
+            Serial = file,
+            Action = id == 1 ? "Attached" : "Removed",
+            Detail = data.GetValueOrDefault("VhdDiskNumber") is { Length: > 0 } n ? $"disk {n}" : "",
+        };
     }
 
     /// <summary>Partition/Diagnostic 1006 is logged on every connect (and with capacity 0 on removal).</summary>

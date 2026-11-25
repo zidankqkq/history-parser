@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
+using HistoryParser.Core.Analysis;
 using HistoryParser.Core.Models;
 using HistoryParser.Core.Native;
 using HistoryParser.Core.Parsers;
@@ -22,17 +23,18 @@ public sealed class UsnJournalCollector : ICollector
     {
         if (!ctx.Options.ReadUsnJournal) return 0;
         int items = 0;
+        List<JournalDeletes.Request>? requests = null;
         foreach (var drive in DriveInfo.GetDrives())
         {
             if (drive.DriveType != DriveType.Fixed || !drive.IsReady || drive.DriveFormat != "NTFS") continue;
-            items += ReadVolume(ctx, drive.Name[..2], ct);
+            items += ReadVolume(ctx, drive.Name[..2], requests ??= JournalDeletes.Read(), ct);
         }
         return items;
     }
 
     sealed record DirEntry(ulong Parent, string Name);
 
-    int ReadVolume(ScanContext ctx, string letter, CancellationToken ct)
+    int ReadVolume(ScanContext ctx, string letter, List<JournalDeletes.Request> requests, CancellationToken ct)
     {
         using var volume = CreateFile($@"\\.\{letter}", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
             IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
@@ -40,6 +42,7 @@ public sealed class UsnJournalCollector : ICollector
             throw new UnauthorizedAccessException($"Cannot open volume {letter} (run as administrator).");
 
         var journalData = new byte[80];
+        int items = 0;
         if (!DeviceIoControl(volume, FSCTL_QUERY_USN_JOURNAL, null, 0, journalData, journalData.Length, out _, IntPtr.Zero))
         {
             int err = Marshal.GetLastWin32Error();
@@ -50,13 +53,17 @@ public sealed class UsnJournalCollector : ICollector
                 // something (Search, OneDrive, backup) needs it, so an inactive one there is normal.
                 bool system = IsSystemDrive(letter) || err == ERROR_JOURNAL_DELETE_IN_PROGRESS;
                 ctx.Check("USN Journal", $"Change journal {letter}", system ? CheckState.Bad : CheckState.Warning, $"The USN journal is {what}.");
+                // The drive has no journal now, so the last request that named its last journal is the one that removed it.
+                var last = JournalDeletes.Deletions(requests, letter, null).LastOrDefault();
+                string who = last == null ? "" : $" The last request to delete it that Windows logged came from {JournalDeletes.Who(last.Request)} at {Util.When.L(last.Request.TimeUtc)}.";
                 ctx.Flag(system ? Severity.High : Severity.Low, FindingCategory.AntiForensics, $"USN journal {what} on {letter}",
-                    system
+                    (system
                         ? "Windows keeps the change journal on by default. Turning it off or deleting it " +
                           "(fsutil usn deletejournal) erases the record of file deletions and renames."
                         : "This is not the Windows drive. Windows only turns the journal on for extra drives when something needs it, " +
-                          "so this can be normal, but it also means file deletions on this drive are not recorded.");
-                return 0;
+                          "so this can be normal, but it also means file deletions on this drive are not recorded.") + who);
+                if (last != null) items += AddDeletion(ctx, letter, last);
+                return items;
             }
             throw new Win32Exception(err);
         }
@@ -94,7 +101,7 @@ public sealed class UsnJournalCollector : ICollector
 
         var order = new ClockOrderTracker(ctx.Options.Tolerance);
         var renameOld = new Dictionary<ulong, string>();
-        int items = 0, records = 0, futureRecords = 0;
+        int records = 0, futureRecords = 0;
         DateTime? firstFuture = null;
         var futureLimit = ctx.NowUtc.AddMinutes(5).ToFileTimeUtc();
         var pfDeletes = new List<PfDelete>();
@@ -243,7 +250,10 @@ public sealed class UsnJournalCollector : ICollector
             hardLinks.Add((linked, time));
         }
 
-        ReportJournal(ctx, letter, journalId, maxSize, order, records, futureRecords, firstFuture);
+        // The request that removed the journal before this one, when Windows logged it.
+        var deletion = JournalDeletes.Deletions(requests, letter, journalId).LastOrDefault(d => d.NextJournalId == journalId);
+        if (deletion != null) items += AddDeletion(ctx, letter, deletion);
+        ReportJournal(ctx, letter, journalId, maxSize, order, records, futureRecords, firstFuture, deletion);
         ReportPrefetchDeletes(ctx, letter, pfDeletes, pfCreates, order.Earliest);
         ReportHardLinks(ctx, letter, hardLinks);
         return items;
@@ -307,8 +317,29 @@ public sealed class UsnJournalCollector : ICollector
         return dirs;
     }
 
+    /// <summary>The deletion as a dated row, beside the cleared event logs.</summary>
+    static int AddDeletion(ScanContext ctx, string letter, JournalDeletes.Deletion d)
+    {
+        ctx.Add(new Evidence
+        {
+            Source = EvidenceSource.EventLog, Kind = EvidenceKind.Deleted, Path = $"[USN journal] {letter} deleted",
+            TimeUtc = d.Request.TimeUtc, Origin = "Ntfs/501",
+            Detail = $"Delete request from {JournalDeletes.Who(d.Request)} for the journal created {Util.When.L(d.DeletedCreatedUtc)}",
+        });
+        return 1;
+    }
+
+    /// <summary>What the finding says once Windows' own log names the request that removed the previous journal.</summary>
+    internal static (string Title, string Detail) DeletionFinding(string letter, JournalDeletes.Deletion d, bool system) =>
+        ($"USN journal on {letter} deleted by {JournalDeletes.Who(d.Request)}",
+         $"Windows logged a request to delete the change journal on {letter} from {JournalDeletes.Who(d.Request)} at {Util.When.L(d.Request.TimeUtc)} " +
+         $"(Ntfs/Operational 501). That journal, created {Util.When.L(d.DeletedCreatedUtc)}, is gone; the one there now was created " +
+         $"{Correlator.FormatGap(d.NextCreatedUtc - d.Request.TimeUtc ?? TimeSpan.Zero)} later. Deleting the journal erases the record of file " +
+         "deletions and renames. The name is as Windows logged it, cut to 14 characters." +
+         (system ? "" : " This is not the Windows drive."));
+
     static void ReportJournal(ScanContext ctx, string letter, ulong journalId, ulong maxSize, ClockOrderTracker order,
-        int records, int futureRecords, DateTime? firstFuture)
+        int records, int futureRecords, DateTime? firstFuture, JournalDeletes.Deletion? deletion = null)
     {
         // The journal ID is the FILETIME at which the journal was created.
         var created = FileTime.ToUtc((long)journalId);
@@ -330,11 +361,19 @@ public sealed class UsnJournalCollector : ICollector
             if (!freshDrive)
             {
                 state = system ? CheckState.Bad : CheckState.Warning;
-                ctx.Flag(system ? Severity.High : Severity.Medium, FindingCategory.AntiForensics, $"USN journal on {letter} was recreated recently",
-                    $"The journal was created {Util.When.L(jc)}, long after Windows was installed ({Util.When.L(install)}). " +
-                    "This happens when someone runs \"fsutil usn deletejournal\" to wipe file history." +
-                    (system ? "" : " This is not the Windows drive, where Windows can also start a journal the first time something needs one."),
-                    timeUtc: jc);
+                if (deletion != null)
+                {
+                    // Same fact, said with who and when: one finding, not two.
+                    var (title, text) = DeletionFinding(letter, deletion, system);
+                    detail += $" Deleted and recreated: delete request from {JournalDeletes.Who(deletion.Request)} at {Util.When.L(deletion.Request.TimeUtc)}.";
+                    ctx.Flag(system ? Severity.High : Severity.Medium, FindingCategory.AntiForensics, title, text, timeUtc: deletion.Request.TimeUtc);
+                }
+                else
+                    ctx.Flag(system ? Severity.High : Severity.Medium, FindingCategory.AntiForensics, $"USN journal on {letter} was recreated recently",
+                        $"The journal was created {Util.When.L(jc)}, long after Windows was installed ({Util.When.L(install)}). " +
+                        "This happens when someone runs \"fsutil usn deletejournal\" to wipe file history." +
+                        (system ? "" : " This is not the Windows drive, where Windows can also start a journal the first time something needs one."),
+                        timeUtc: jc);
             }
         }
         ctx.Check("USN Journal", $"Change journal {letter}", state, detail);

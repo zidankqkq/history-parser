@@ -35,10 +35,10 @@ public static class Scanner
         ICollector first = new PrefetchCollector();
         ICollector[] rest =
         [
-            new SystemStateCollector(), new BamCollector(), new PcaCollector(), new UserAssistCollector(),
+            new SystemStateCollector(), new BamCollector(), new BamDeletedCollector(), new PcaCollector(), new UserAssistCollector(),
             new ShimCacheCollector(), new MuiCacheCollector(), new JavaUsageCollector(), new RecycleBinCollector(),
             new ShellHistoryCollector(), new EventLogCollector(), new UsnJournalCollector(), new ProcessMemoryCollector(),
-            new AmcacheCollector(), new RecentShortcutCollector(), new JumpListCollector(), new ExplorerUsageCollector(), new CrashReportCollector(),
+            new AmcacheCollector(), new RecentShortcutCollector(), new JumpListCollector(), new FileDialogCollector(), new ExplorerUsageCollector(), new CrashReportCollector(),
             new CapabilityAccessCollector(), new LoadedDriverCollector(), new DefenderDetectionCollector(),
         ];
         int total = rest.Length + 3, done = 0;
@@ -88,7 +88,7 @@ public static class Scanner
         var running = Process.GetProcesses().Select(p => { using (p) return p.ProcessName + ".exe"; }).ToList();
         // Small time-service corrections are reported but do not taint individual run times.
         var significant = clockChanges.Where(c => c.Severity >= Severity.Medium || c.IsRollback).ToList();
-        var correlator = new Correlator(started, options.Tolerance, significant, running);
+        var correlator = new Correlator(started, options.Tolerance, significant, running, bootUtc: boot);
         var evidence = ctx.Evidence.ToList();
         var since = TimeWindows.Since(options.Window, started, boot, ctx.SignInUtc, ctx.Games.Count > 0 ? ctx.Games[0].StartUtc : null);
 

@@ -69,6 +69,7 @@ public static class Display
         EvidenceSource.CapabilityAccess => "Privacy access",
         EvidenceSource.JumpList => "Jump list",
         EvidenceSource.LoadedDriver => "Kernel",
+        EvidenceSource.FileDialog => "File dialog",
         _ => s.ToString(),
     };
 

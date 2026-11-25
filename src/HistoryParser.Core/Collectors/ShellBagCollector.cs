@@ -128,7 +128,7 @@ public sealed class ShellBagCollector : ICollector
         }
     }
 
-    static string Join(string? parent, string name) => parent switch
+    internal static string Join(string? parent, string name) => parent switch
     {
         null => "…\\" + name,
         "" => name,
@@ -165,7 +165,7 @@ public sealed class ShellBagCollector : ICollector
     // ---- known folders ----------------------------------------------------------------------
 
     /// <summary>Where a user's Desktop, Downloads … really are (they can be moved, e.g. into OneDrive).</summary>
-    sealed class KnownFolders
+    internal sealed class KnownFolders
     {
         readonly string _sid;
         readonly string? _profile;

@@ -26,6 +26,8 @@ public enum EvidenceSource
     JumpList,
     /// <summary>A driver or kernel module that is loaded right now (the kernel's own list).</summary>
     LoadedDriver,
+    /// <summary>A file picked in an Open / Save dialog, or a program that showed one.</summary>
+    FileDialog,
 }
 
 /// <summary>What the evidence says happened to the file.</summary>

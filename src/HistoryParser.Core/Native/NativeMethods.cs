@@ -32,6 +32,21 @@ internal static class NativeMethods
     public static extern uint QueryDosDevice(string deviceName, char[] targetPath, uint maxChars);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr FindFirstVolumeW([Out] char[] volumeName, uint bufferLength);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool FindNextVolumeW(IntPtr findVolume, [Out] char[] volumeName, uint bufferLength);
+
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool FindVolumeClose(IntPtr findVolume);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetVolumePathNamesForVolumeNameW(string volumeName, [Out] char[] volumePathNames, uint bufferLength, out uint returnLength);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern bool GetVolumeInformation(string rootPathName, char[]? volumeNameBuffer, uint volumeNameSize,
         out uint volumeSerialNumber, out uint maximumComponentLength, out uint fileSystemFlags,
         char[]? fileSystemNameBuffer, uint fileSystemNameSize);
