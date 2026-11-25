@@ -1,0 +1,38 @@
+# Keeps the text of each release page the same as its part of CHANGELOG.md.
+# Runs when CHANGELOG.md changes on main. It only rewrites a release's description: no tag, file or build is touched.
+name: notes
+
+on:
+  push:
+    branches: [main]
+    paths: ['CHANGELOG.md']
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update the release pages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $text = (Get-Content CHANGELOG.md -Raw) -replace "`r`n", "`n"
+          foreach ($m in [regex]::Matches($text, "(?ms)^## ([0-9][^\s]*)[^`n]*`n(.*?)(?=^## |\z)")) {
+            $tag = 'v' + $m.Groups[1].Value
+            $body = gh release view $tag --json body --jq .body 2>$null
+            if ($LASTEXITCODE -ne 0) { "no release $tag yet"; continue }
+            # the link GitHub added under the release stays
+            $link = @($body -split "`n" | Where-Object { $_ -match '^\*\*Full Changelog\*\*' }) | Select-Object -Last 1
+            $notes = $m.Groups[2].Value.Trim()
+            if ($link) { $notes += "`n`n" + $link.Trim() }
+            $notes | Out-File notes.md -Encoding utf8
+            gh release edit $tag --notes-file notes.md
+            "updated $tag"
+          }
+          exit 0

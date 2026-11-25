@@ -42,6 +42,17 @@ jobs:
         with:
           subject-path: publish/HistoryParser.exe
 
+      - name: Notes
+        # The release page says what changed: the part of CHANGELOG.md under this version's heading.
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $text = (Get-Content CHANGELOG.md -Raw) -replace "`r`n", "`n"
+          $m = [regex]::Match($text, "(?ms)^## " + [regex]::Escape($version) + "[^`n]*`n(.*?)(?=^## |\z)")
+          $notes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { '' }
+          $notes | Out-File publish/NOTES.md -Encoding utf8
+          Get-Content publish/NOTES.md
+
       - name: Remove an earlier release of this tag
         # A tag that is pushed again replaces its release. Without this the earlier files would stay beside the new ones.
         shell: pwsh
@@ -59,4 +70,5 @@ jobs:
             publish/HistoryParser.exe
             publish/SHA256SUMS.txt
             run.ps1
+          body_path: publish/NOTES.md
           generate_release_notes: true
